@@ -18,7 +18,7 @@ config TRUSTY_FIQ_ARM
 	depends on ARM
 	select FIQ_GLUE
 	select TRUSTY_FIQ
-	default y
+	default n
 
 config TRUSTY_FIQ_ARM64
 	tristate
@@ -26,23 +26,23 @@ config TRUSTY_FIQ_ARM64
 	depends on ARM64
 	select FIQ_GLUE
 	select TRUSTY_FIQ
-	default y
+	default n
 
 config TRUSTY_LOG
 	tristate
 	depends on TRUSTY
-	default y
+	default n
 
 config TRUSTY_VIRTIO
 	tristate "Trusty virtio support"
 	depends on TRUSTY
 	select VIRTIO
-	default y
+	default n
 
 config TRUSTY_VIRTIO_IPC
 	tristate "Trusty Virtio IPC driver"
 	depends on TRUSTY_VIRTIO
-	default y
+	default n
 	help
 	  This module adds support for communications with Trusty Services
 

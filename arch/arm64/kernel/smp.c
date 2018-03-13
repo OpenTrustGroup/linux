@@ -955,7 +955,8 @@ static void custom_ipi_enable(struct irq_data *data)
 	 * Always trigger a new ipi on enable. This only works for clients
 	 * that then clear the ipi before unmasking interrupts.
 	 */
-	smp_cross_call(cpumask_of(smp_processor_id()), data->hwirq);
+	/* TODO(james): investigate why need to send IPI when enable */
+	//smp_cross_call(cpumask_of(smp_processor_id()), data->hwirq);
 }
 
 static void custom_ipi_disable(struct irq_data *data)

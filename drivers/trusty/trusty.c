@@ -24,6 +24,7 @@
 #include <linux/trusty/smcall.h>
 #include <linux/trusty/sm_err.h>
 #include <linux/trusty/trusty.h>
+#include <linux/trusty/trusty_shm.h>
 
 struct trusty_state;
 
@@ -466,6 +467,10 @@ static int trusty_probe(struct platform_device *pdev)
 	if (ret < 0)
 		goto err_api_version;
 
+	ret = trusty_init_shm_pool(&pdev->dev);
+	if (ret < 0)
+		goto err_shm_pool;
+
 	s->nop_wq = alloc_workqueue("trusty-nop-wq", WQ_CPU_INTENSIVE, 0);
 	if (!s->nop_wq) {
 		ret = -ENODEV;
@@ -510,6 +515,8 @@ err_add_children:
 err_alloc_works:
 	destroy_workqueue(s->nop_wq);
 err_create_nop_wq:
+	trusty_destroy_shm_pool(&pdev->dev);
+err_shm_pool:
 err_api_version:
 	if (s->version_str) {
 		device_remove_file(&pdev->dev, &dev_attr_trusty_version);
@@ -536,6 +543,8 @@ static int trusty_remove(struct platform_device *pdev)
 	}
 	free_percpu(s->nop_works);
 	destroy_workqueue(s->nop_wq);
+
+	trusty_destroy_shm_pool(&pdev->dev);
 
 	mutex_destroy(&s->smc_lock);
 	if (s->version_str) {

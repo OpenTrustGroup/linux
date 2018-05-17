@@ -30,6 +30,7 @@
 #include <linux/virtio_config.h>
 
 #include <linux/trusty/trusty_ipc.h>
+#include <linux/trusty/trusty_shm.h>
 
 #define MAX_DEVICES			4
 
@@ -172,12 +173,12 @@ static int _match_data(int id, void *p, void *data)
 
 static void *_alloc_shareable_mem(size_t sz, phys_addr_t *ppa, gfp_t gfp)
 {
-	return alloc_pages_exact(sz, gfp);
+	return trusty_alloc_shm(sz, ppa);
 }
 
 static void _free_shareable_mem(size_t sz, void *va, phys_addr_t pa)
 {
-	free_pages_exact(va, sz);
+	trusty_free_shm(va, sz);
 }
 
 static struct tipc_msg_buf *_alloc_msg_buf(size_t sz)

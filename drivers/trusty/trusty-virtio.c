@@ -25,6 +25,7 @@
 #include <linux/platform_device.h>
 #include <linux/trusty/smcall.h>
 #include <linux/trusty/trusty.h>
+#include <linux/trusty/trusty_shm.h>
 
 #include <linux/virtio.h>
 #include <linux/virtio_config.h>
@@ -284,7 +285,7 @@ static void _del_vqs(struct virtio_device *vdev)
 		}
 		/* delete vring */
 		if (tvr->vaddr) {
-			free_pages_exact(tvr->vaddr, tvr->size);
+			trusty_free_shm(tvr->vaddr, tvr->size);
 			tvr->vaddr = NULL;
 		}
 	}
@@ -318,13 +319,12 @@ static struct virtqueue *_find_vq(struct virtio_device *vdev,
 	tvr->size = PAGE_ALIGN(vring_size(tvr->elem_num, tvr->align));
 
 	/* allocate memory for the vring. */
-	tvr->vaddr = alloc_pages_exact(tvr->size, GFP_KERNEL | __GFP_ZERO);
+	tvr->vaddr = trusty_alloc_shm(tvr->size, &pa);
 	if (!tvr->vaddr) {
 		dev_err(&vdev->dev, "vring alloc failed\n");
 		return ERR_PTR(-ENOMEM);
 	}
 
-	pa = virt_to_phys(tvr->vaddr);
 	/* save vring address to shared structure */
 	tvr->vr_descr->da = (u32)pa;
 	/* da field is only 32 bit wide. Use previously unused 'reserved' field
@@ -349,7 +349,7 @@ static struct virtqueue *_find_vq(struct virtio_device *vdev,
 	return tvr->vq;
 
 err_new_virtqueue:
-	free_pages_exact(tvr->vaddr, tvr->size);
+	trusty_free_shm(tvr->vaddr, tvr->size);
 	tvr->vaddr = NULL;
 	return ERR_PTR(-ENOMEM);
 }
@@ -564,7 +564,7 @@ static int trusty_virtio_add_devices(struct trusty_ctx *tctx)
 
 	/* allocate buffer to load device descriptor into */
 	descr_buf_sz = PAGE_SIZE;
-	descr_va = alloc_pages_exact(descr_buf_sz, GFP_KERNEL | __GFP_ZERO);
+	descr_va = trusty_alloc_shm(descr_buf_sz, NULL);
 	if (!descr_va) {
 		dev_err(tctx->dev, "Failed to allocate shared area\n");
 		return -ENOMEM;
@@ -623,7 +623,7 @@ err_parse_descr:
 	cancel_work_sync(&tctx->kick_vqs);
 	trusty_virtio_stop(tctx, descr_va, descr_sz);
 err_load_descr:
-	free_pages_exact(descr_va, descr_buf_sz);
+	trusty_free_shm(descr_va, descr_buf_sz);
 	return ret;
 }
 
@@ -704,7 +704,7 @@ static int trusty_virtio_remove(struct platform_device *pdev)
 	trusty_virtio_stop(tctx, tctx->shared_va, tctx->shared_sz);
 
 	/* free shared area */
-	free_pages_exact(tctx->shared_va, tctx->shared_sz);
+	trusty_free_shm(tctx->shared_va, tctx->shared_sz);
 
 	/* free context */
 	kfree(tctx);

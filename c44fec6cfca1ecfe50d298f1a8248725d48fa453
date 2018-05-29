@@ -22,6 +22,30 @@
       "revId": "c44fec6cfca1ecfe50d298f1a8248725d48fa453",
       "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
       "unresolved": true
+    },
+    {
+      "key": {
+        "uuid": "639b3d2e_e20bd829",
+        "filename": "drivers/trusty/trusty.c",
+        "patchSetId": 2
+      },
+      "lineNbr": 517,
+      "author": {
+        "id": 1012985
+      },
+      "writtenOn": "2018-05-29T15:05:58Z",
+      "side": 1,
+      "message": "will fix it",
+      "parentUuid": "396a338e_b165f8e1",
+      "range": {
+        "startLine": 517,
+        "startChar": 0,
+        "endLine": 517,
+        "endChar": 18
+      },
+      "revId": "c44fec6cfca1ecfe50d298f1a8248725d48fa453",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
     }
   ]
 }

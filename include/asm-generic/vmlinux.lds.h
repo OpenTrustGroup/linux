@@ -1143,3 +1143,15 @@
 	BSS(bss_align)							\
 	. = ALIGN(stop_align);						\
 	__bss_stop = .;
+
+#ifdef CONFIG_NEBULA_UNITTEST
+#define NEBULA_UNITTEST_TESTCASES							\
+	ALIGN_FUNCTION();					\
+	.nbl.unittest_testcases : AT(ADDR(.nbl.unittest_testcases) - LOAD_OFFSET) { \
+		__start_unittest_testcases = .;		\
+		KEEP(*(.nbl.unittest_testcases))			\
+		__stop_unittest_testcases = .;		\
+	}
+#else
+#define NEBULA_UNITTEST_TESTCASES
+#endif

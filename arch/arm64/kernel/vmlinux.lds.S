@@ -204,6 +204,10 @@ SECTIONS
 			*(.gnu.warning)
 	}
 
+#ifdef CONFIG_NEBULA_UNITTEST
+	NEBULA_UNITTEST_TESTCASES
+#endif
+
 	. = ALIGN(SEGMENT_ALIGN);
 	_etext = .;			/* End of text section */
 

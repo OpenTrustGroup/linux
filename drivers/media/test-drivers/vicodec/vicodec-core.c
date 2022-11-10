@@ -29,7 +29,7 @@ MODULE_DESCRIPTION("Virtual codec device");
 MODULE_AUTHOR("Hans Verkuil <hans.verkuil@cisco.com>");
 MODULE_LICENSE("GPL v2");
 
-static bool multiplanar;
+static bool multiplanar = true;
 module_param(multiplanar, bool, 0444);
 MODULE_PARM_DESC(multiplanar,
 		 " use multi-planar API instead of single-planar API");

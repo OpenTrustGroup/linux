@@ -112,6 +112,26 @@ struct vicodec_dev {
 
 };
 
+#ifdef CONFIG_VIDEO_VICODEC_MTK_EXTENSION
+struct mtk_dec_params {
+	unsigned int    decode_mode;
+	unsigned int    frame_size_width;
+	unsigned int    frame_size_height;
+	unsigned int    fixed_max_frame_size_width;
+	unsigned int    fixed_max_frame_size_height;
+	char            *crc_path;
+	char            *golden_path;
+	unsigned int    fb_num_planes;
+	unsigned int	wait_key_frame;
+	unsigned int	nal_size_length;
+	unsigned int	svp_mode;
+	unsigned int	operating_rate;
+	u64	timestamp;
+	unsigned int	total_frame_bufq_count;
+	unsigned int	queued_frame_buf_count;
+};
+#endif
+
 struct vicodec_ctx {
 	struct v4l2_fh		fh;
 	struct vicodec_dev	*dev;
@@ -134,6 +154,9 @@ struct vicodec_ctx {
 	bool			comp_has_next_frame;
 	bool			first_source_change_sent;
 	bool			source_changed;
+#ifdef CONFIG_VIDEO_VICODEC_MTK_EXTENSION
+	struct mtk_dec_params	dec_params;
+#endif
 };
 
 static const struct v4l2_event vicodec_eos_event = {
@@ -1774,6 +1797,64 @@ static void update_header_from_stateless_params(struct vicodec_ctx *ctx,
 	p_hdr->quantization = htonl(params->quantization);
 }
 
+#ifdef CONFIG_VIDEO_VICODEC_MTK_EXTENSION
+struct mtk_color_desc {
+	__u32	color_primaries;
+	__u32	transform_character;
+	__u32	matrix_coeffs;
+	__u32	display_primaries_x[3];
+	__u32	display_primaries_y[3];
+	__u32	white_point_x;
+	__u32	white_point_y;
+	__u32	max_display_mastering_luminance;
+	__u32	min_display_mastering_luminance;
+	__u32	max_content_light_level;
+	__u32	max_pic_light_level;
+	__u32   is_hdr;
+	__u32   full_range;
+};
+
+static int vicodec_g_v_ctrl(struct v4l2_ctrl *ctrl)
+{
+	struct vicodec_ctx *ctx = container_of(ctrl->handler,
+					       struct vicodec_ctx, hdl);
+	int ret = 0;
+	struct mtk_color_desc *color_desc;
+
+	switch (ctrl->id) {
+	case V4L2_CID_MIN_BUFFERS_FOR_CAPTURE:
+		ctrl->val = 10;
+		break;
+	case V4L2_CID_MPEG_MTK_FRAME_INTERVAL:
+		ctrl->val = 20;
+		break;
+	case V4L2_CID_MPEG_MTK_COLOR_DESC:
+		color_desc = (struct mtk_color_desc *)ctrl->p_new.p_u32;
+		color_desc->white_point_x = 0xdead;
+		color_desc->white_point_y = 0xbeef;
+		break;
+	case V4L2_CID_MPEG_MTK_ASPECT_RATIO:
+		ctrl->val = 30;
+		break;
+	case V4L2_CID_MPEG_MTK_FIX_BUFFERS:
+		ctrl->val = 40;
+		break;
+	case V4L2_CID_MPEG_MTK_FIX_BUFFERS_SVP:
+		ctrl->val = 50;
+		break;
+	case V4L2_CID_MPEG_MTK_INTERLACING:
+		ctrl->val = 1;
+		break;
+	case V4L2_CID_MPEG_MTK_CODEC_TYPE:
+		*ctrl->p_new.p_u32 = 70;
+		break;
+	default:
+		ret = -EINVAL;
+	}
+	return ret;
+}
+#endif
+
 static int vicodec_s_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct vicodec_ctx *ctx = container_of(ctrl->handler,
@@ -1795,11 +1876,52 @@ static int vicodec_s_ctrl(struct v4l2_ctrl *ctrl)
 		update_header_from_stateless_params(ctx, params);
 		ctx->state.ref_frame_ts = params->backward_ref_ts;
 		return 0;
+#ifdef CONFIG_VIDEO_VICODEC_MTK_EXTENSION
+	case V4L2_CID_MPEG_MTK_DECODE_MODE:
+		ctx->dec_params.decode_mode = ctrl->val;
+		return 0;
+	case V4L2_CID_MPEG_MTK_SEC_DECODE:
+		ctx->dec_params.svp_mode = ctrl->val;
+		return 0;
+	case V4L2_CID_MPEG_MTK_FRAME_SIZE:
+		if (ctx->dec_params.frame_size_width == 0)
+			ctx->dec_params.frame_size_width = ctrl->val;
+		else if (ctx->dec_params.frame_size_height == 0)
+			ctx->dec_params.frame_size_height = ctrl->val;
+		return 0;
+	case V4L2_CID_MPEG_MTK_FIXED_MAX_FRAME_BUFFER:
+		if (ctx->dec_params.fixed_max_frame_size_width == 0)
+			ctx->dec_params.fixed_max_frame_size_width = ctrl->val;
+		else if (ctx->dec_params.fixed_max_frame_size_height == 0)
+			ctx->dec_params.fixed_max_frame_size_height = ctrl->val;
+		return 0;
+	case V4L2_CID_MPEG_MTK_CRC_PATH:
+		ctx->dec_params.crc_path = ctrl->p_new.p_char;
+		return 0;
+	case V4L2_CID_MPEG_MTK_GOLDEN_PATH:
+		ctx->dec_params.golden_path = ctrl->p_new.p_char;
+		return 0;
+	case V4L2_CID_MPEG_MTK_SET_WAIT_KEY_FRAME:
+		ctx->dec_params.wait_key_frame = ctrl->val;
+		return 0;
+	case V4L2_CID_MPEG_MTK_SET_NAL_SIZE_LENGTH:
+		ctx->dec_params.nal_size_length = ctrl->val;
+		return 0;
+	case V4L2_CID_MPEG_MTK_OPERATING_RATE:
+		ctx->dec_params.operating_rate = ctrl->val;
+		return 0;
+	case V4L2_CID_MPEG_MTK_QUEUED_FRAMEBUF_COUNT:
+		ctx->dec_params.queued_frame_buf_count = ctrl->val;
+		return 0;
+#endif
 	}
 	return -EINVAL;
 }
 
 static const struct v4l2_ctrl_ops vicodec_ctrl_ops = {
+#ifdef CONFIG_VIDEO_VICODEC_MTK_EXTENSION
+	.g_volatile_ctrl = vicodec_g_v_ctrl,
+#endif
 	.s_ctrl = vicodec_s_ctrl,
 	.try_ctrl = vicodec_try_ctrl,
 };
@@ -1809,6 +1931,164 @@ static const struct v4l2_ctrl_config vicodec_ctrl_stateless_state = {
 	.id		= V4L2_CID_STATELESS_FWHT_PARAMS,
 	.elem_size      = sizeof(struct v4l2_ctrl_fwht_params),
 };
+
+#ifdef CONFIG_VIDEO_VICODEC_MTK_EXTENSION
+#define MTK_MAX_CTRLS_HINT	64
+
+static const struct v4l2_ctrl_config mtk_color_desc_ctrl = {
+	.ops = &vicodec_ctrl_ops,
+	.id = V4L2_CID_MPEG_MTK_COLOR_DESC,
+	.name = "MTK Color Description for HDR",
+	.type = V4L2_CTRL_TYPE_U32,
+	.min = 0x00000000,
+	.max = 0x00ffffff,
+	.step = 1,
+	.def = 0,
+	.dims = { sizeof(struct mtk_color_desc)/sizeof(u32) },
+};
+
+static const struct v4l2_ctrl_config mtk_interlacing_ctrl = {
+	.ops = &vicodec_ctrl_ops,
+	.id = V4L2_CID_MPEG_MTK_INTERLACING,
+	.name = "MTK Query Interlacing",
+	.type = V4L2_CTRL_TYPE_BOOLEAN,
+	.min = 0,
+	.max = 1,
+	.step = 1,
+	.def = 0,
+};
+
+static const struct v4l2_ctrl_config mtk_codec_type_ctrl = {
+	.ops = &vicodec_ctrl_ops,
+	.id = V4L2_CID_MPEG_MTK_CODEC_TYPE,
+	.name = "MTK Query HW/SW Codec Type",
+	.type = V4L2_CTRL_TYPE_U32,
+	.min = 0,
+	.max = 10,
+	.step = 1,
+	.def = 0,
+};
+
+static const struct v4l2_ctrl_config mtk_codec_type_crc_path = {
+	.ops = &vicodec_ctrl_ops,
+	.id = V4L2_CID_MPEG_MTK_CRC_PATH,
+	.name = "Video crc path",
+	.type = V4L2_CTRL_TYPE_STRING,
+	.max = 255,
+	.step = 1,
+};
+
+static const struct v4l2_ctrl_config mtk_codec_type_golden_path = {
+	.ops = &vicodec_ctrl_ops,
+	.id = V4L2_CID_MPEG_MTK_GOLDEN_PATH,
+	.name = "Video golden path",
+	.type = V4L2_CTRL_TYPE_STRING,
+	.max = 255,
+	.step = 1,
+};
+
+void mtk_vcodec_dec_ctrls_setup(struct vicodec_ctx *ctx)
+{
+	struct v4l2_ctrl *ctrl;
+
+	/* g_volatile_ctrl */
+	ctrl = v4l2_ctrl_new_std(&ctx->hdl,
+		&vicodec_ctrl_ops,
+		V4L2_CID_MIN_BUFFERS_FOR_CAPTURE,
+		0, 32, 1, 1);
+	if (ctrl)
+		ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE;
+
+	ctrl = v4l2_ctrl_new_std(&ctx->hdl,
+		&vicodec_ctrl_ops,
+		V4L2_CID_MPEG_MTK_FRAME_INTERVAL,
+		16666, 41719, 1, 33333);
+	if (ctrl)
+		ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE;
+
+	ctrl = v4l2_ctrl_new_std(&ctx->hdl,
+				&vicodec_ctrl_ops,
+				V4L2_CID_MPEG_MTK_ASPECT_RATIO,
+				0, 0xF000F, 1, 0x10001);
+	if (ctrl)
+		ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE;
+
+	ctrl = v4l2_ctrl_new_std(&ctx->hdl,
+				&vicodec_ctrl_ops,
+				V4L2_CID_MPEG_MTK_FIX_BUFFERS,
+				0, 0xF, 1, 0);
+	if (ctrl)
+		ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE;
+
+	ctrl = v4l2_ctrl_new_std(&ctx->hdl,
+				&vicodec_ctrl_ops,
+				V4L2_CID_MPEG_MTK_FIX_BUFFERS_SVP,
+				0, 0xF, 1, 0);
+	if (ctrl)
+		ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE;
+
+	ctrl = v4l2_ctrl_new_custom(&ctx->hdl,
+				&mtk_interlacing_ctrl, NULL);
+	if (ctrl)
+		ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE;
+
+	ctrl = v4l2_ctrl_new_custom(&ctx->hdl,
+				&mtk_codec_type_ctrl, NULL);
+	if (ctrl)
+		ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE;
+
+	ctrl = v4l2_ctrl_new_custom(&ctx->hdl, &mtk_color_desc_ctrl, NULL);
+	if (ctrl)
+		ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE;
+
+
+	/* s_ctrl */
+	ctrl = v4l2_ctrl_new_std(&ctx->hdl,
+		&vicodec_ctrl_ops,
+		V4L2_CID_MPEG_MTK_DECODE_MODE,
+		0, 32, 1, 0);
+
+	ctrl = v4l2_ctrl_new_std(&ctx->hdl,
+		&vicodec_ctrl_ops,
+		V4L2_CID_MPEG_MTK_SEC_DECODE,
+		0, 32, 1, 0);
+
+	ctrl = v4l2_ctrl_new_std(&ctx->hdl,
+		&vicodec_ctrl_ops,
+		V4L2_CID_MPEG_MTK_FRAME_SIZE,
+		0, 65535, 1, 0);
+
+	ctrl = v4l2_ctrl_new_std(&ctx->hdl,
+		&vicodec_ctrl_ops,
+		V4L2_CID_MPEG_MTK_FIXED_MAX_FRAME_BUFFER,
+		0, 65535, 1, 0);
+
+	ctrl = v4l2_ctrl_new_custom(&ctx->hdl, &mtk_codec_type_crc_path, NULL);
+
+	ctrl = v4l2_ctrl_new_custom(&ctx->hdl, &mtk_codec_type_golden_path,
+				    NULL);
+
+	ctrl = v4l2_ctrl_new_std(&ctx->hdl,
+		&vicodec_ctrl_ops,
+		V4L2_CID_MPEG_MTK_GOLDEN_PATH,
+		0, 255, 1, 0);
+
+	ctrl = v4l2_ctrl_new_std(&ctx->hdl,
+				&vicodec_ctrl_ops,
+				V4L2_CID_MPEG_MTK_SET_WAIT_KEY_FRAME,
+				0, 255, 1, 0);
+
+	ctrl = v4l2_ctrl_new_std(&ctx->hdl,
+				&vicodec_ctrl_ops,
+				V4L2_CID_MPEG_MTK_OPERATING_RATE,
+				0, 4096, 1, 0);
+
+	ctrl = v4l2_ctrl_new_std(&ctx->hdl,
+				&vicodec_ctrl_ops,
+				V4L2_CID_MPEG_MTK_QUEUED_FRAMEBUF_COUNT,
+				0, 64, 1, 0);
+}
+#endif
 
 /*
  * File operations
@@ -1841,6 +2121,9 @@ static int vicodec_open(struct file *file)
 	file->private_data = &ctx->fh;
 	ctx->dev = dev;
 	hdl = &ctx->hdl;
+#ifdef CONFIG_VIDEO_VICODEC_MTK_EXTENSION
+	v4l2_ctrl_handler_init(hdl, MTK_MAX_CTRLS_HINT);
+#endif
 	v4l2_ctrl_handler_init(hdl, 5);
 	v4l2_ctrl_new_std(hdl, &vicodec_ctrl_ops, V4L2_CID_MPEG_VIDEO_GOP_SIZE,
 			  1, 16, 1, 10);
@@ -1859,6 +2142,9 @@ static int vicodec_open(struct file *file)
 		kfree(ctx);
 		goto open_unlock;
 	}
+#ifdef CONFIG_VIDEO_VICODEC_MTK_EXTENSION
+	mtk_vcodec_dec_ctrls_setup(ctx);
+#endif
 	ctx->fh.ctrl_handler = hdl;
 	v4l2_ctrl_handler_setup(hdl);
 

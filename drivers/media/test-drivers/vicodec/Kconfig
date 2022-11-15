@@ -13,3 +13,7 @@ config VIDEO_VICODEC
 	  a video device node that exposes an emulated hardware codec.
 
 	  When in doubt, say N.
+
+config VIDEO_VICODEC_MTK_EXTENSION
+	depends on VIDEO_VICODEC
+	bool "MTK extension Support"

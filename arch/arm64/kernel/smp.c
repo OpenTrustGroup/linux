@@ -918,7 +918,7 @@ static void do_handle_IPI(int ipinr)
 	default:
 		if (ipi_custom_irq_domain &&
 		    ipinr >= IPI_CUSTOM_FIRST && ipinr <= IPI_CUSTOM_LAST)
-			handle_domain_irq(ipi_custom_irq_domain, ipinr, regs);
+			generic_handle_domain_irq(ipi_custom_irq_domain, ipinr);
 		else
 			pr_crit("CPU%u: Unknown IPI message 0x%x\n",
 				cpu, ipinr);

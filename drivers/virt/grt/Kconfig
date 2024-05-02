@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: GPL-2.0
+
+config GRT_HYPERVISOR_SUPPORT
+	tristate "GoldenRiver Thyp Hypervisor Support"
+	default n
+
+config GRT_ACRN_HSM
+	tristate "Goldenriver ACRN Hypervisor Service Module"
+	depends on GRT_HYPERVISOR_SUPPORT
+	select EVENTFD
+	help
+	  ACRN Hypervisor Service Module (HSM) is a kernel module which
+	  communicates with ACRN userspace through ioctls and talks to
+	  the ACRN Hypervisor through hypercalls. HSM will only run in
+	  a privileged management VM, called Service VM, to manage User
+	  VMs and do I/O emulation. Not required for simply running
+	  under ACRN as a User VM.
+
+	  To compile as a module, choose M, the module will be called
+	  acrn. If unsure, say N.
+
+config GRT_VHOST_DMABUF
+	tristate "VHOST_DMABUF driver"
+	depends on EVENTFD
+	select VHOST
+	default n
+	help
+	  Say Y here to enable guest to share memory with host using dma-buf
+
+config GRT_VHOST_BLK
+	tristate "Host kernel accelerator for virtio blk (EXPERIMENTAL)"
+	depends on BLOCK
+	help
+	  This kernel module can be loaded in host kernel to accelerate
+	  guest block with virtio_blk. Not to be confused with virtio_blk
+	  module itself which needs to be loaded in guest kernel.
+
+	  To compile this driver as a module, choose M here: the module will
+	  be called vhost_blk.

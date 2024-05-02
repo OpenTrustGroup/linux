@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Support GKI mixed build
+
+ifeq ($(DEVICE_MODULES_PATH),)
+DEVICE_MODULES_PATH = $(srctree)
+else
+LINUXINCLUDE := $(DEVCIE_MODULES_INCLUDE) $(LINUXINCLUDE)
+endif
+
+obj-$(CONFIG_GRT_ACRN_HSM) += guest_memory_pool.o
+obj-$(CONFIG_GRT_ACRN_HSM) += preloaded_image.o
+obj-$(CONFIG_GRT_ACRN_HSM) += vmem_query.o
+obj-$(CONFIG_GRT_ACRN_HSM) += physical_memory_translater.o

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Support GKI mixed build
+
+ifeq ($(DEVICE_MODULES_PATH),)
+DEVICE_MODULES_PATH = $(srctree)
+else
+LINUXINCLUDE := $(DEVCIE_MODULES_INCLUDE) $(LINUXINCLUDE)
+endif
+
+ccflags-y += -I$(DEVICE_MODULES_PATH)/include/
+
+obj-$(CONFIG_GRT_ACRN_HSM)	+= acrn_nbl.o
+#acrn-y := hsm.o vm.o mm.o ioreq.o ioeventfd.o irqfd.o sbuf.o hvtrace.o hvlog.o
+acrn_nbl-y += hsm.o
+acrn_nbl-y += vm.o
+acrn_nbl-y += mm.o
+acrn_nbl-y += ioreq.o
+acrn_nbl-y += ioeventfd.o
+acrn_nbl-y += irqfd.o
+

@@ -1398,18 +1398,11 @@ static void __init gic_smp_init(void)
 				  gic_starting_cpu, NULL);
 
 	/* Register all 8 non-secure SGIs */
-#if CONFIG_NEBULA
-	base_sgi = irq_domain_alloc_irqs(gic_data.domain, 16, NUMA_NO_NODE, &sgi_fwspec);
-#else
 	base_sgi = irq_domain_alloc_irqs(gic_data.domain, 8, NUMA_NO_NODE, &sgi_fwspec);
-#endif
 	if (WARN_ON(base_sgi <= 0))
 		return;
-#if CONFIG_NEBULA
-	set_smp_ipi_range(base_sgi, 16);
-#else
+
 	set_smp_ipi_range(base_sgi, 8);
-#endif
 }
 
 static int gic_set_affinity(struct irq_data *d, const struct cpumask *mask_val,

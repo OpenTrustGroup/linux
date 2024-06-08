@@ -41,11 +41,7 @@
 #define VIRTIO_ID_MAC80211_WLAN		10 /* virtio WLAN MAC */
 #define VIRTIO_ID_RPROC_SERIAL		11 /* virtio remoteproc serial link */
 #define VIRTIO_ID_CAIF			12 /* Virtio caif */
-/*
- * TODO: VIRTIO_ID_MEMORY_BALLOON is 13, The value of VIRTIO_ID_TRUSTY_IPC is occupied, need to modify nebula code.
- * But current practices VIRTIO_ID_TRUSTY_IPC set 13, VIRTIO_ID_MEMORY_BALLOON set 42.
- */
-#define VIRTIO_ID_TRUSTY_IPC    13 /* virtio trusty ipc */
+#define VIRTIO_ID_MEMORY_BALLOON	13 /* virtio memory balloon */
 #define VIRTIO_ID_GPU			16 /* virtio GPU */
 #define VIRTIO_ID_CLOCK			17 /* virtio clock/timer */
 #define VIRTIO_ID_INPUT			18 /* virtio input */
@@ -72,7 +68,7 @@
 #define VIRTIO_ID_AUDIO_POLICY		39 /* virtio audio policy */
 #define VIRTIO_ID_BT			40 /* virtio bluetooth */
 #define VIRTIO_ID_GPIO			41 /* virtio gpio */
-#define VIRTIO_ID_MEMORY_BALLOON	42 /* virtio memory balloon */
+
 /*
  * Virtio Transitional IDs
  */

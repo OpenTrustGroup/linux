@@ -12,14 +12,10 @@
 #ifndef REMOTEPROC_VIRTIO_H
 #define REMOTEPROC_VIRTIO_H
 
-#include <metal/io.h>
-#include <metal/list.h>
-#include <openamp/virtio.h>
-#include <metal/cache.h>
+#include <linux/list.h>
+#include <linux/io.h>
 
-#if defined __cplusplus
-extern "C" {
-#endif
+#include "virtio.h"
 
 /* maximum number of vring descriptors for a vdev limited by 16-bit data type */
 #define	RPROC_MAX_VRING_DESC	USHRT_MAX
@@ -48,7 +44,7 @@ struct remoteproc_virtio {
 	void *vdev_rsc;
 
 	/** Metal I/O region of vdev_info, can be NULL */
-	struct metal_io_region *vdev_rsc_io;
+	void *vdev_rsc_io;
 
 	/** Notification function */
 	rpvdev_notify_func notify;
@@ -57,7 +53,7 @@ struct remoteproc_virtio {
 	struct virtio_device vdev;
 
 	/** List node */
-	struct metal_list node;
+	struct list_head node;
 };
 
 /**
@@ -125,9 +121,5 @@ int rproc_virtio_notified(struct virtio_device *vdev, uint32_t notifyid);
  * @return true when remote processor is ready.
  */
 void rproc_virtio_wait_remote_ready(struct virtio_device *vdev);
-
-#if defined __cplusplus
-}
-#endif
 
 #endif /* REMOTEPROC_VIRTIO_H */

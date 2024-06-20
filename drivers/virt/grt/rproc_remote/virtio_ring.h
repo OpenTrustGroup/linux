@@ -9,11 +9,8 @@
 #ifndef VIRTIO_RING_H
 #define	VIRTIO_RING_H
 
-#include <metal/compiler.h>
-
-#if defined __cplusplus
-extern "C" {
-#endif
+#include <linux/types.h>
+#include <linux/errno.h>
 
 /* This marks a buffer as continuing via the next field. */
 #define VRING_DESC_F_NEXT       1
@@ -43,7 +40,6 @@ extern "C" {
  * chain of descriptors can contain both device-readable and device-writable
  * buffers.
  */
-METAL_PACKED_BEGIN
 struct vring_desc {
 	/** Address (guest-physical) */
 	uint64_t addr;
@@ -56,7 +52,7 @@ struct vring_desc {
 
 	/** We chain unused descriptors via this, too */
 	uint16_t next;
-} METAL_PACKED_END;
+} __packed;
 
 /**
  * @brief Used to offer buffers to the device.
@@ -64,7 +60,6 @@ struct vring_desc {
  * Each ring entry refers to the head of a descriptor chain. It is only
  * written by the driver and read by the device.
  */
-METAL_PACKED_BEGIN
 struct vring_avail {
 	/** Flag which determines whether device notifications are required */
 	uint16_t flags;
@@ -77,10 +72,9 @@ struct vring_avail {
 
 	/** The ring of descriptors */
 	uint16_t ring[0];
-} METAL_PACKED_END;
+} __packed;
 
 /* uint32_t is used here for ids for padding reasons. */
-METAL_PACKED_BEGIN
 struct vring_used_elem {
 	union {
 		uint16_t event;
@@ -89,14 +83,13 @@ struct vring_used_elem {
 	};
 	/* Total length of the descriptor chain which was written to. */
 	uint32_t len;
-} METAL_PACKED_END;
+} __packed;
 
 /**
  * @brief The device returns buffers to this structure when done with them
  *
  * The structure is only written to by the device, and read by the driver.
  */
-METAL_PACKED_BEGIN
 struct vring_used {
 	/** Flag which determines whether device notifications are required */
 	uint16_t flags;
@@ -109,7 +102,7 @@ struct vring_used {
 
 	/** The ring of descriptors */
 	struct vring_used_elem ring[0];
-} METAL_PACKED_END;
+} __packed;
 
 /**
  * @brief The virtqueue layout structure
@@ -210,9 +203,5 @@ vring_need_event(uint16_t event_idx, uint16_t new_idx, uint16_t old)
 	return (uint16_t)(new_idx - event_idx - 1) <
 	    (uint16_t)(new_idx - old);
 }
-
-#if defined __cplusplus
-}
-#endif
 
 #endif				/* VIRTIO_RING_H */

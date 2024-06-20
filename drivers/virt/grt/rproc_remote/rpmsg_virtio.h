@@ -12,15 +12,8 @@
 #ifndef _RPMSG_VIRTIO_H_
 #define _RPMSG_VIRTIO_H_
 
-#include <metal/io.h>
-#include <metal/mutex.h>
-#include <metal/cache.h>
-#include <openamp/rpmsg.h>
-#include <openamp/virtio.h>
-
-#if defined __cplusplus
-extern "C" {
-#endif
+#include "rpmsg.h"
+#include "virtio.h"
 
 /* Configurable parameters */
 #ifndef RPMSG_BUFFER_SIZE
@@ -100,7 +93,7 @@ struct rpmsg_virtio_device {
 	 * RPMsg buffer reclaimer that contains buffers released by the
 	 * \ref rpmsg_virtio_release_tx_buffer function
 	 */
-	struct metal_list reclaimer;
+	struct list_head reclaimer;
 
 	/**
 	 * Callback handler for rpmsg virtio service, called when service
@@ -414,13 +407,9 @@ rpmsg_virtio_get_rpmsg_device(struct rpmsg_virtio_device *rvdev)
  *
  * @return Buffer pointer if free buffer is available, NULL otherwise.
  */
-metal_weak void *
+void *
 rpmsg_virtio_shm_pool_get_buffer(struct rpmsg_virtio_shm_pool *shpool,
 				 size_t size);
-
-#if defined __cplusplus
-}
-#endif
 
 #endif	/* _RPMSG_VIRTIO_H_ */
 

@@ -9,12 +9,11 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#include <openamp/remoteproc.h>
-#include <openamp/remoteproc_virtio.h>
-#include <openamp/virtqueue.h>
-#include <metal/cpu.h>
-#include <metal/utilities.h>
-#include <metal/alloc.h>
+#include <linux/mod_devicetable.h>
+
+#include "remoteproc.h"
+#include "remoteproc_virtio.h"
+#include "virtqueue.h"
 
 static void rproc_virtio_delete_virtqueues(struct virtio_device *vdev)
 {
@@ -99,8 +98,8 @@ static void rproc_virtio_virtqueue_notify(struct virtqueue *vq)
 	unsigned int vq_id = vq->vq_queue_index;
 
 	vdev = vq->vq_dev;
-	rpvdev = metal_container_of(vdev, struct remoteproc_virtio, vdev);
-	metal_assert(vq_id < vdev->vrings_num);
+	rpvdev = container_of(vdev, struct remoteproc_virtio, vdev);
+	BUG_ON(vq_id >= vdev->vrings_num);
 	vring_info = &vdev->vrings_info[vq_id];
 	rpvdev->notify(rpvdev->priv, vring_info->notifyid);
 }
@@ -109,15 +108,11 @@ static unsigned char rproc_virtio_get_status(struct virtio_device *vdev)
 {
 	struct remoteproc_virtio *rpvdev;
 	struct fw_rsc_vdev *vdev_rsc;
-	struct metal_io_region *io;
 	char status;
 
-	rpvdev = metal_container_of(vdev, struct remoteproc_virtio, vdev);
+	rpvdev = container_of(vdev, struct remoteproc_virtio, vdev);
 	vdev_rsc = rpvdev->vdev_rsc;
-	io = rpvdev->vdev_rsc_io;
-	RSC_TABLE_INVALIDATE(vdev_rsc, sizeof(struct fw_rsc_vdev));
-	status = metal_io_read8(io,
-				metal_io_virt_to_offset(io, &vdev_rsc->status));
+	status = vdev_rsc->status;
 	return status;
 }
 
@@ -125,15 +120,11 @@ static uint32_t rproc_virtio_get_dfeatures(struct virtio_device *vdev)
 {
 	struct remoteproc_virtio *rpvdev;
 	struct fw_rsc_vdev *vdev_rsc;
-	struct metal_io_region *io;
 	uint32_t features;
 
-	rpvdev = metal_container_of(vdev, struct remoteproc_virtio, vdev);
+	rpvdev = container_of(vdev, struct remoteproc_virtio, vdev);
 	vdev_rsc = rpvdev->vdev_rsc;
-	io = rpvdev->vdev_rsc_io;
-	RSC_TABLE_INVALIDATE(vdev_rsc, sizeof(struct fw_rsc_vdev));
-	features = metal_io_read32(io,
-			metal_io_virt_to_offset(io, &vdev_rsc->dfeatures));
+	features = vdev_rsc->dfeatures;
 
 	return features;
 }
@@ -142,16 +133,12 @@ static uint32_t rproc_virtio_get_features(struct virtio_device *vdev)
 {
 	struct remoteproc_virtio *rpvdev;
 	struct fw_rsc_vdev *vdev_rsc;
-	struct metal_io_region *io;
 	uint32_t gfeatures;
 	uint32_t dfeatures;
 
-	rpvdev = metal_container_of(vdev, struct remoteproc_virtio, vdev);
+	rpvdev = container_of(vdev, struct remoteproc_virtio, vdev);
 	vdev_rsc = rpvdev->vdev_rsc;
-	io = rpvdev->vdev_rsc_io;
-	RSC_TABLE_INVALIDATE(vdev_rsc, sizeof(struct fw_rsc_vdev));
-	gfeatures = metal_io_read32(io,
-			metal_io_virt_to_offset(io, &vdev_rsc->gfeatures));
+	gfeatures = vdev_rsc->gfeatures;
 	dfeatures = rproc_virtio_get_dfeatures(vdev);
 
 	return dfeatures & gfeatures;
@@ -162,19 +149,14 @@ static void rproc_virtio_read_config(struct virtio_device *vdev,
 {
 	struct remoteproc_virtio *rpvdev;
 	struct fw_rsc_vdev *vdev_rsc;
-	struct metal_io_region *io;
 	char *config;
 
-	rpvdev = metal_container_of(vdev, struct remoteproc_virtio, vdev);
+	rpvdev = container_of(vdev, struct remoteproc_virtio, vdev);
 	vdev_rsc = rpvdev->vdev_rsc;
 	config = (char *)(&vdev_rsc->vring[vdev->vrings_num]);
-	io = rpvdev->vdev_rsc_io;
 
 	if (offset + length <= vdev_rsc->config_len) {
-		RSC_TABLE_INVALIDATE(config + offset, length);
-		metal_io_block_read(io,
-				metal_io_virt_to_offset(io, config + offset),
-				dst, length);
+		memcpy(dst, config + offset, length);
 	}
 }
 
@@ -200,14 +182,13 @@ rproc_virtio_create_vdev(unsigned int role, unsigned int notifyid,
 	struct virtio_device *vdev;
 	unsigned int num_vrings = vdev_rsc->num_of_vrings;
 
-	rpvdev = metal_allocate_memory(sizeof(*rpvdev));
+	pr_debug("num_vrings %d\n", num_vrings);
+	rpvdev = kzalloc(sizeof(*rpvdev), GFP_KERNEL);
 	if (!rpvdev)
 		return NULL;
-	vrings_info = metal_allocate_memory(sizeof(*vrings_info) * num_vrings);
+	vrings_info = kzalloc(sizeof(*vrings_info) * num_vrings, GFP_KERNEL);
 	if (!vrings_info)
 		goto err;
-	memset(rpvdev, 0, sizeof(*rpvdev));
-	memset(vrings_info, 0, sizeof(*vrings_info) * num_vrings);
 
 	/* Initialize the remoteproc virtio */
 	rpvdev->notify = notify;
@@ -230,7 +211,7 @@ rproc_virtio_create_vdev(unsigned int role, unsigned int notifyid,
 
 	return &rpvdev->vdev;
 err:
-	metal_free_memory(rpvdev);
+	kfree(rpvdev);
 	return NULL;
 }
 
@@ -240,10 +221,10 @@ void rproc_virtio_remove_vdev(struct virtio_device *vdev)
 
 	if (!vdev)
 		return;
-	rpvdev = metal_container_of(vdev, struct remoteproc_virtio, vdev);
+	rpvdev = container_of(vdev, struct remoteproc_virtio, vdev);
 	if (vdev->vrings_info)
-		metal_free_memory(vdev->vrings_info);
-	metal_free_memory(rpvdev);
+		kfree(vdev->vrings_info);
+	kfree(rpvdev);
 }
 
 int rproc_virtio_init_vring(struct virtio_device *vdev, unsigned int index,
@@ -298,6 +279,6 @@ void rproc_virtio_wait_remote_ready(struct virtio_device *vdev)
 		status = rproc_virtio_get_status(vdev);
 		if (status & VIRTIO_CONFIG_STATUS_DRIVER_OK)
 			return;
-		metal_cpu_yield();
+		schedule();
 	}
 }

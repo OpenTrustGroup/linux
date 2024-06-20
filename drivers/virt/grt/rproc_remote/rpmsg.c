@@ -7,8 +7,9 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#include <openamp/rpmsg.h>
-#include <metal/alloc.h>
+#include <linux/mod_devicetable.h>
+
+#include "rpmsg.h"
 
 #include "rpmsg_internal.h"
 
@@ -133,6 +134,7 @@ int rpmsg_send_offchannel_raw(struct rpmsg_endpoint *ept, uint32_t src,
 
 	return RPMSG_ERR_PARAM;
 }
+EXPORT_SYMBOL(rpmsg_send_offchannel_raw);
 
 int rpmsg_send_ns_message(struct rpmsg_endpoint *ept, unsigned long flags)
 {
@@ -163,6 +165,7 @@ void rpmsg_hold_rx_buffer(struct rpmsg_endpoint *ept, void *rxbuf)
 	if (rdev->ops.hold_rx_buffer)
 		rdev->ops.hold_rx_buffer(rdev, rxbuf);
 }
+EXPORT_SYMBOL(rpmsg_hold_rx_buffer);
 
 void rpmsg_release_rx_buffer(struct rpmsg_endpoint *ept, void *rxbuf)
 {
@@ -176,6 +179,7 @@ void rpmsg_release_rx_buffer(struct rpmsg_endpoint *ept, void *rxbuf)
 	if (rdev->ops.release_rx_buffer)
 		rdev->ops.release_rx_buffer(rdev, rxbuf);
 }
+EXPORT_SYMBOL(rpmsg_release_rx_buffer);
 
 int rpmsg_release_tx_buffer(struct rpmsg_endpoint *ept, void *buf)
 {
@@ -191,6 +195,7 @@ int rpmsg_release_tx_buffer(struct rpmsg_endpoint *ept, void *buf)
 
 	return RPMSG_ERR_PERM;
 }
+EXPORT_SYMBOL(rpmsg_release_tx_buffer);
 
 void *rpmsg_get_tx_payload_buffer(struct rpmsg_endpoint *ept,
 				  uint32_t *len, int wait)
@@ -207,6 +212,7 @@ void *rpmsg_get_tx_payload_buffer(struct rpmsg_endpoint *ept,
 
 	return NULL;
 }
+EXPORT_SYMBOL(rpmsg_get_tx_payload_buffer);
 
 int rpmsg_send_offchannel_nocopy(struct rpmsg_endpoint *ept, uint32_t src,
 				 uint32_t dst, const void *data, int len)
@@ -224,18 +230,17 @@ int rpmsg_send_offchannel_nocopy(struct rpmsg_endpoint *ept, uint32_t src,
 
 	return RPMSG_ERR_PARAM;
 }
+EXPORT_SYMBOL(rpmsg_send_offchannel_nocopy);
 
 struct rpmsg_endpoint *rpmsg_get_endpoint(struct rpmsg_device *rdev,
 					  const char *name, uint32_t addr,
 					  uint32_t dest_addr)
 {
-	struct metal_list *node;
 	struct rpmsg_endpoint *ept;
 
-	metal_list_for_each(&rdev->endpoints, node) {
+	list_for_each_entry(ept, &rdev->endpoints, node) {
 		int name_match = 0;
 
-		ept = metal_container_of(node, struct rpmsg_endpoint, node);
 		/* try to get by local address only */
 		if (addr != RPMSG_ADDR_ANY && ept->addr == addr)
 			return ept;
@@ -259,13 +264,13 @@ static void rpmsg_unregister_endpoint(struct rpmsg_endpoint *ept)
 {
 	struct rpmsg_device *rdev = ept->rdev;
 
-	metal_mutex_acquire(&rdev->lock);
+	mutex_lock(&rdev->lock);
 	if (ept->addr != RPMSG_ADDR_ANY)
 		rpmsg_release_address(rdev->bitmap, RPMSG_ADDR_BMP_SIZE,
 				      ept->addr);
-	metal_list_del(&ept->node);
+	list_del(&ept->node);
 	rpmsg_ept_decref(ept);
-	metal_mutex_release(&rdev->lock);
+	mutex_unlock(&rdev->lock);
 }
 
 void rpmsg_register_endpoint(struct rpmsg_device *rdev,
@@ -282,7 +287,8 @@ void rpmsg_register_endpoint(struct rpmsg_device *rdev,
 	ept->cb = cb;
 	ept->ns_unbind_cb = ns_unbind_cb;
 	ept->rdev = rdev;
-	metal_list_add_tail(&rdev->endpoints, &ept->node);
+	INIT_LIST_HEAD(&ept->node);
+	list_add_tail(&ept->node, &rdev->endpoints);
 }
 
 int rpmsg_create_ept(struct rpmsg_endpoint *ept, struct rpmsg_device *rdev,
@@ -295,7 +301,7 @@ int rpmsg_create_ept(struct rpmsg_endpoint *ept, struct rpmsg_device *rdev,
 	if (!ept || !rdev || !cb)
 		return RPMSG_ERR_PARAM;
 
-	metal_mutex_acquire(&rdev->lock);
+	mutex_lock(&rdev->lock);
 	if (src == RPMSG_ADDR_ANY) {
 		addr = rpmsg_get_address(rdev->bitmap, rdev->bitnext, RPMSG_ADDR_BMP_SIZE);
 		if (addr == RPMSG_ADDR_ANY) {
@@ -324,7 +330,7 @@ int rpmsg_create_ept(struct rpmsg_endpoint *ept, struct rpmsg_device *rdev,
 	}
 
 	rpmsg_register_endpoint(rdev, ept, name, addr, dest, cb, unbind_cb);
-	metal_mutex_release(&rdev->lock);
+	mutex_unlock(&rdev->lock);
 
 	/* Send NS announcement to remote processor */
 	if (ept->name[0] && rdev->support_ns &&
@@ -336,9 +342,10 @@ int rpmsg_create_ept(struct rpmsg_endpoint *ept, struct rpmsg_device *rdev,
 	return status;
 
 ret_status:
-	metal_mutex_release(&rdev->lock);
+	mutex_unlock(&rdev->lock);
 	return status;
 }
+EXPORT_SYMBOL(rpmsg_create_ept);
 
 void rpmsg_destroy_ept(struct rpmsg_endpoint *ept)
 {
@@ -354,3 +361,4 @@ void rpmsg_destroy_ept(struct rpmsg_endpoint *ept)
 		(void)rpmsg_send_ns_message(ept, RPMSG_NS_DESTROY);
 	rpmsg_unregister_endpoint(ept);
 }
+EXPORT_SYMBOL(rpmsg_destroy_ept);

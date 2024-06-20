@@ -10,17 +10,16 @@
  * $FreeBSD$
  */
 
-#include <stdbool.h>
-#include <stdint.h>
+#include <linux/string.h>
+#include <linux/device.h>
+#include <linux/dma-mapping.h>
 
-#if defined __cplusplus
-extern "C" {
-#endif
+#include "virtio_ring.h"
 
-#include <openamp/virtio_ring.h>
-#include <metal/alloc.h>
-#include <metal/io.h>
-#include <metal/cache.h>
+// rename symbol to avoid conflict with linux's
+#define virtqueue_disable_cb _virtqueue_disable_cb
+#define virtqueue_enable_cb _virtqueue_enable_cb
+#define virtqueue_kick _virtqueue_kick
 
 /* Error Codes */
 #define VQ_ERROR_BASE                                 -3000
@@ -243,7 +242,7 @@ int virtqueue_create(struct virtio_device *device, unsigned short id,
  * @io - pointer to the shared memory I/O region
  */
 static inline void virtqueue_set_shmem_io(struct virtqueue *vq,
-					  struct metal_io_region *io)
+					  void *io)
 {
 	vq->shm_io = io;
 }
@@ -341,7 +340,7 @@ static inline struct virtqueue *virtqueue_allocate(unsigned int num_desc_extra)
 	uint32_t vq_size = sizeof(struct virtqueue) +
 		 num_desc_extra * sizeof(struct vq_desc_extra);
 
-	vqs = (struct virtqueue *)metal_allocate_memory(vq_size);
+	vqs = (struct virtqueue *)kzalloc(vq_size, GFP_KERNEL);
 	if (vqs) {
 		memset(vqs, 0x00, vq_size);
 	}
@@ -407,8 +406,9 @@ static inline int virtqueue_full(struct virtqueue *vq)
 	return (vq->vq_free_cnt == 0);
 }
 
-#if defined __cplusplus
-}
-#endif
+struct metal_io_region {
+	void* (*paddr_to_vaddr)(struct virtqueue *vq, phys_addr_t phys);
+	phys_addr_t (*vaddr_to_paddr)(struct virtqueue *vq, void *vaddr);
+};
 
 #endif				/* VIRTQUEUE_H_ */

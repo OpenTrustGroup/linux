@@ -12,9 +12,11 @@
 #ifndef REMOTEPROC_H
 #define REMOTEPROC_H
 
-#include <metal/io.h>
-#include <metal/mutex.h>
-#include <metal/compiler.h>
+#include <linux/compiler.h>
+#include <linux/io.h>
+#include <linux/mutex.h>
+#include <linux/list.h>
+
 
 #if defined __cplusplus
 extern "C" {
@@ -47,7 +49,6 @@ extern "C" {
  * Immediately following this header are the resource entries themselves,
  * each of which begins with a resource entry header.
  */
-METAL_PACKED_BEGIN
 struct resource_table {
 	/** Version number */
 	uint32_t ver;
@@ -60,7 +61,7 @@ struct resource_table {
 
 	/** Array of offsets pointing at the various resource entries */
 	uint32_t offset[0];
-} METAL_PACKED_END;
+} __packed;
 
 /**
  * @brief Resource table entry header
@@ -69,14 +70,13 @@ struct resource_table {
  * its \ref type. The content of the entry itself will immediately follow
  * this header, and it should be parsed according to the resource type.
  */
-METAL_PACKED_BEGIN
 struct fw_rsc_hdr {
 	/** Resource type matching the type field of the structure in \ref data */
 	uint32_t type;
 
 	/** Resource data */
 	uint8_t data[0];
-} METAL_PACKED_END;
+} __packed;
 
 /**
  * enum fw_resource_type - types of resource entries
@@ -146,7 +146,6 @@ enum fw_resource_type {
  * (remote remoteprocs are generally _not_ trusted), so we might want to
  * change this to happen _only_ when explicitly required by the hardware.
  */
-METAL_PACKED_BEGIN
 struct fw_rsc_carveout {
 	/** Resource carveout has type 0 */
 	uint32_t type;
@@ -168,7 +167,7 @@ struct fw_rsc_carveout {
 
 	/** Optional human-readable name of the requested memory region used for debugging */
 	uint8_t name[RPROC_MAX_NAME_LEN];
-} METAL_PACKED_END;
+} __packed;
 
 /**
  * @brief Resource table IOMMU mapping request entry
@@ -187,7 +186,6 @@ struct fw_rsc_carveout {
  * the firmware is allowed to request, and not allow firmwares to request
  * access to physical addresses that are outside those ranges.
  */
-METAL_PACKED_BEGIN
 struct fw_rsc_devmem {
 	/** IOMMU mapping request has type 1 */
 	uint32_t type;
@@ -209,7 +207,7 @@ struct fw_rsc_devmem {
 
 	/** Optional human-readable name of the requested memory region used for debugging */
 	uint8_t name[RPROC_MAX_NAME_LEN];
-} METAL_PACKED_END;
+} __packed;
 
 /**
  * @brief Resource table trace buffer declaration entry
@@ -220,7 +218,6 @@ struct fw_rsc_devmem {
  * After booting the remote remoteproc, the trace buffers are exposed to the
  * user via debugfs entries (called trace0, trace1, etc..).
  */
-METAL_PACKED_BEGIN
 struct fw_rsc_trace {
 	/** Trace buffer entry has type 2 */
 	uint32_t type;
@@ -236,7 +233,7 @@ struct fw_rsc_trace {
 
 	/** Optional human-readable name of the requested memory region used for debugging */
 	uint8_t name[RPROC_MAX_NAME_LEN];
-} METAL_PACKED_END;
+} __packed;
 
 /**
  * @brief Resource table vring descriptor entry
@@ -244,7 +241,6 @@ struct fw_rsc_trace {
  * This descriptor is not a resource entry by itself; it is part of the
  * \ref fw_rsc_vdev resource type.
  */
-METAL_PACKED_BEGIN
 struct fw_rsc_vdev_vring {
 	/**
 	 * The device address where the remoteproc is expecting the vring, or
@@ -268,7 +264,7 @@ struct fw_rsc_vdev_vring {
 
 	/** Reserved (must be zero) */
 	uint32_t reserved;
-} METAL_PACKED_END;
+} __packed;
 
 /**
  * @brief Resource table virtio device entry
@@ -291,10 +287,9 @@ struct fw_rsc_vdev_vring {
  * this vdev (which is specific to the vdev; for more info, read the virtio
  * spec).
  */
-METAL_PACKED_BEGIN
 struct fw_rsc_vdev {
 	/** Virtio device header has type 3 */
-	uint32_t type;
+	// uint32_t type;
 
 	/** Virtio device id (as in virtio_ids.h) */
 	uint32_t id;
@@ -332,7 +327,7 @@ struct fw_rsc_vdev {
 
 	/** An array of \ref num_of_vrings entries of \ref fw_rsc_vdev_vring */
 	struct fw_rsc_vdev_vring vring[0];
-} METAL_PACKED_END;
+} __packed;
 
 /**
  * @brief Resource table remote processor vendor specific entry
@@ -343,14 +338,13 @@ struct fw_rsc_vdev {
  * These request entries should precede other shared resource entries
  * such as vdevs, vrings.
  */
-METAL_PACKED_BEGIN
 struct fw_rsc_vendor {
 	/** Vendor specific resource type can be values 128-512 */
 	uint32_t type;
 
 	/** Length of the resource */
 	uint32_t len;
-} METAL_PACKED_END;
+} __packed;
 
 struct loader_ops;
 struct image_store_ops;
@@ -359,10 +353,10 @@ struct remoteproc_ops;
 /** @brief Memory used by the remote processor */
 struct remoteproc_mem {
 	/** Device memory */
-	metal_phys_addr_t da;
+	phys_addr_t da;
 
 	/** Physical memory */
-	metal_phys_addr_t pa;
+	phys_addr_t pa;
 
 	/** Size of the memory */
 	size_t size;
@@ -371,10 +365,10 @@ struct remoteproc_mem {
 	char name[RPROC_MAX_NAME_LEN];
 
 	/** Pointer to the I/O region */
-	struct metal_io_region *io;
+	void *io;
 
 	/** List node */
-	struct metal_list node;
+	struct list_head node;
 };
 
 /**
@@ -386,7 +380,7 @@ struct remoteproc_mem {
  */
 struct remoteproc {
 	/** Mutex lock */
-	metal_mutex_t lock;
+	struct mutex lock;
 
 	/** Pointer to the resource table */
 	void *rsc_table;
@@ -395,13 +389,13 @@ struct remoteproc {
 	size_t rsc_len;
 
 	/** Metal I/O region of the resource table */
-	struct metal_io_region *rsc_io;
+	void *rsc_io;
 
 	/** Remoteproc memories */
-	struct metal_list mems;
+	struct list_head mems;
 
 	/** Remoteproc virtio devices */
-	struct metal_list vdevs;
+	struct list_head vdevs;
 
 	/** Bitmap for notify IDs for remoteproc subdevices */
 	unsigned long bitmap;
@@ -410,7 +404,7 @@ struct remoteproc {
 	const struct remoteproc_ops *ops;
 
 	/** Boot address */
-	metal_phys_addr_t bootaddr;
+	phys_addr_t bootaddr;
 
 	/** Executable loader */
 	const struct loader_ops *loader;
@@ -437,9 +431,9 @@ struct remoteproc_ops {
 
 	/** Memory map the memory with physical address or destination address as input */
 	void *(*mmap)(struct remoteproc *rproc,
-		      metal_phys_addr_t *pa, metal_phys_addr_t *da,
+		      phys_addr_t *pa, phys_addr_t *da,
 		      size_t size, unsigned int attribute,
-		      struct metal_io_region **io);
+		      void **io);
 
 	/** Handle the vendor specific resource */
 	int (*handle_rsc)(struct remoteproc *rproc, void *rsc, size_t len);
@@ -478,8 +472,8 @@ struct remoteproc_ops {
 	 */
 	struct remoteproc_mem *(*get_mem)(struct remoteproc *rproc,
 					  const char *name,
-					  metal_phys_addr_t pa,
-					  metal_phys_addr_t da,
+					  phys_addr_t pa,
+					  phys_addr_t da,
 					  void *va, size_t size,
 					  struct remoteproc_mem *buf);
 };
@@ -575,8 +569,8 @@ int remoteproc_remove(struct remoteproc *rproc);
  */
 static inline void
 remoteproc_init_mem(struct remoteproc_mem *mem, const char *name,
-		    metal_phys_addr_t pa, metal_phys_addr_t da,
-		    size_t size, struct metal_io_region *io)
+		    phys_addr_t pa, phys_addr_t da,
+		    size_t size, void *io)
 {
 	if (!mem || !io || size == 0)
 		return;
@@ -601,7 +595,7 @@ remoteproc_add_mem(struct remoteproc *rproc, struct remoteproc_mem *mem)
 {
 	if (!rproc || !mem)
 		return;
-	metal_list_add_tail(&rproc->mems, &mem->node);
+	list_add_tail(&rproc->mems, &mem->node);
 }
 
 /**
@@ -626,7 +620,7 @@ remoteproc_get_io_with_name(struct remoteproc *rproc,
  */
 struct metal_io_region *
 remoteproc_get_io_with_pa(struct remoteproc *rproc,
-			  metal_phys_addr_t pa);
+			  phys_addr_t pa);
 
 /**
  * @brief Get remoteproc memory I/O region with device address
@@ -639,7 +633,7 @@ remoteproc_get_io_with_pa(struct remoteproc *rproc,
  */
 struct metal_io_region *
 remoteproc_get_io_with_da(struct remoteproc *rproc,
-			  metal_phys_addr_t da,
+			  phys_addr_t da,
 			  unsigned long *offset);
 
 /**
@@ -667,9 +661,9 @@ remoteproc_get_io_with_va(struct remoteproc *rproc,
  * @return Pointer to the memory
  */
 void *remoteproc_mmap(struct remoteproc *rproc,
-		      metal_phys_addr_t *pa, metal_phys_addr_t *da,
+		      phys_addr_t *pa, phys_addr_t *da,
 		      size_t size, unsigned int attribute,
-		      struct metal_io_region **io);
+		      void **io);
 
 /**
  * @brief Parse and set resource table of remoteproc
@@ -798,7 +792,7 @@ int remoteproc_load(struct remoteproc *rproc, const char *path,
 int remoteproc_load_noblock(struct remoteproc *rproc,
 			    const void *img_data, size_t offset, size_t len,
 			    void **img_info,
-			    metal_phys_addr_t *pa, struct metal_io_region **io,
+			    phys_addr_t *pa, void **io,
 			    size_t *noffset, size_t *nlen,
 			    size_t *nmlen, unsigned char *padding);
 

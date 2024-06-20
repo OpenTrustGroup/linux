@@ -7,12 +7,7 @@
 #ifndef _RPMSG_INTERNAL_H_
 #define _RPMSG_INTERNAL_H_
 
-#include <stdint.h>
-#include <openamp/rpmsg.h>
-
-#if defined __cplusplus
-extern "C" {
-#endif
+#include "rpmsg.h"
 
 #ifdef RPMSG_DEBUG
 #include <metal/log.h>
@@ -54,7 +49,6 @@ enum rpmsg_ns_flags {
  *
  * Every message sent(/received) on the RPMsg bus begins with this header.
  */
-METAL_PACKED_BEGIN
 struct rpmsg_hdr {
 	/** Source address */
 	uint32_t src;
@@ -70,7 +64,7 @@ struct rpmsg_hdr {
 
 	/** Message flags */
 	uint16_t flags;
-} METAL_PACKED_END;
+} __packed;
 
 /**
  * @brief Dynamic name service announcement message
@@ -81,7 +75,6 @@ struct rpmsg_hdr {
  * or ->remove() handler of the appropriate RPMsg driver will be invoked
  * (if/as-soon-as one is registered).
  */
-METAL_PACKED_BEGIN
 struct rpmsg_ns_msg {
 	/** Name of the remote service that is being published */
 	char name[RPMSG_NAME_SIZE];
@@ -91,7 +84,7 @@ struct rpmsg_ns_msg {
 
 	/** Indicates whether service is created or destroyed */
 	uint32_t flags;
-} METAL_PACKED_END;
+} __packed;
 
 int rpmsg_send_ns_message(struct rpmsg_endpoint *ept, unsigned long flags);
 
@@ -135,9 +128,5 @@ void rpmsg_ept_incref(struct rpmsg_endpoint *ept);
  * @param ept	pointer to rpmsg endpoint
  */
 void rpmsg_ept_decref(struct rpmsg_endpoint *ept);
-
-#if defined __cplusplus
-}
-#endif
 
 #endif /* _RPMSG_INTERNAL_H_ */

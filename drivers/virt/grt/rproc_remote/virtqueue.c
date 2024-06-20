@@ -5,12 +5,11 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <string.h>
-#include <openamp/virtio.h>
-#include <openamp/virtqueue.h>
-#include <metal/atomic.h>
-#include <metal/log.h>
-#include <metal/alloc.h>
+#include <linux/string.h>
+#include <linux/mod_devicetable.h>
+
+#include "virtio.h"
+#include "virtqueue.h"
 
 /* Prototype for internal functions. */
 static void vq_ring_init(struct virtqueue *, void *, int);
@@ -25,20 +24,20 @@ static int virtqueue_navail(struct virtqueue *vq);
 
 /* Default implementation of P2V based on libmetal */
 static inline void *virtqueue_phys_to_virt(struct virtqueue *vq,
-					   metal_phys_addr_t phys)
+					   phys_addr_t phys)
 {
 	struct metal_io_region *io = vq->shm_io;
 
-	return metal_io_phys_to_virt(io, phys);
+	return io->paddr_to_vaddr(vq, phys);
 }
 
 /* Default implementation of V2P based on libmetal */
-static inline metal_phys_addr_t virtqueue_virt_to_phys(struct virtqueue *vq,
+static inline phys_addr_t virtqueue_virt_to_phys(struct virtqueue *vq,
 						       void *buf)
 {
 	struct metal_io_region *io = vq->shm_io;
 
-	return metal_io_virt_to_phys(io, buf);
+	return io->vaddr_to_paddr(vq, buf);
 }
 
 int virtqueue_create(struct virtio_device *virt_dev, unsigned short id,
@@ -148,7 +147,7 @@ void *virtqueue_get_buffer(struct virtqueue *vq, uint32_t *len, uint16_t *idx)
 	used_idx = vq->vq_used_cons_idx++ & (vq->vq_nentries - 1);
 	uep = &vq->vq_ring.used->ring[used_idx];
 
-	atomic_thread_fence(memory_order_seq_cst);
+	smp_wmb();
 
 	/* Used.ring is written by remote, invalidate it */
 	VRING_INVALIDATE(&vq->vq_ring.used->ring[used_idx],
@@ -188,12 +187,11 @@ void virtqueue_free(struct virtqueue *vq)
 {
 	if (vq) {
 		if (vq->vq_free_cnt != vq->vq_nentries) {
-			metal_log(METAL_LOG_WARNING,
-				  "%s: freeing non-empty virtqueue\r\n",
-				  vq->vq_name);
+			pr_warn("%s: freeing non-empty virtqueue\n",
+				vq->vq_name);
 		}
 
-		metal_free_memory(vq);
+		kfree(vq);
 	}
 }
 
@@ -203,7 +201,7 @@ void *virtqueue_get_available_buffer(struct virtqueue *vq, uint16_t *avail_idx,
 	uint16_t head_idx = 0;
 	void *buffer;
 
-	atomic_thread_fence(memory_order_seq_cst);
+	smp_rmb();
 
 	/* Avail.idx is updated by driver, invalidate it */
 	VRING_INVALIDATE(&vq->vq_ring.avail->idx, sizeof(vq->vq_ring.avail->idx));
@@ -253,7 +251,7 @@ int virtqueue_add_consumed_buffer(struct virtqueue *vq, uint16_t head_idx,
 	VRING_FLUSH(&vq->vq_ring.used->ring[used_idx],
 		    sizeof(vq->vq_ring.used->ring[used_idx]));
 
-	atomic_thread_fence(memory_order_seq_cst);
+	smp_wmb();
 
 	vq->vq_ring.used->idx++;
 
@@ -296,7 +294,7 @@ void virtqueue_kick(struct virtqueue *vq)
 	VQUEUE_BUSY(vq);
 
 	/* Ensure updated avail->idx is visible to host. */
-	atomic_thread_fence(memory_order_seq_cst);
+	smp_wmb();
 
 	if (vq_ring_must_notify(vq))
 		vq_ring_notify(vq);
@@ -314,15 +312,14 @@ void virtqueue_dump(struct virtqueue *vq)
 	VRING_INVALIDATE(&vq->vq_ring.avail, sizeof(vq->vq_ring.avail));
 	VRING_INVALIDATE(&vq->vq_ring.used, sizeof(vq->vq_ring.used));
 
-	metal_log(METAL_LOG_DEBUG,
-		  "VQ: %s - size=%d; free=%d; queued=%d; desc_head_idx=%d; "
-		  "available_idx=%d; avail.idx=%d; used_cons_idx=%d; "
-		  "used.idx=%d; avail.flags=0x%x; used.flags=0x%x\r\n",
-		  vq->vq_name, vq->vq_nentries, vq->vq_free_cnt,
-		  vq->vq_queued_cnt, vq->vq_desc_head_idx, vq->vq_available_idx,
-		  vq->vq_ring.avail->idx, vq->vq_used_cons_idx,
-		  vq->vq_ring.used->idx, vq->vq_ring.avail->flags,
-		  vq->vq_ring.used->flags);
+	pr_info("VQ: %s - size=%d; free=%d; queued=%d; desc_head_idx=%d; "
+		"available_idx=%d; avail.idx=%d; used_cons_idx=%d; "
+		"used.idx=%d; avail.flags=0x%x; used.flags=0x%x\r\n",
+		vq->vq_name, vq->vq_nentries, vq->vq_free_cnt,
+		vq->vq_queued_cnt, vq->vq_desc_head_idx, vq->vq_available_idx,
+		vq->vq_ring.avail->idx, vq->vq_used_cons_idx,
+		vq->vq_ring.used->idx, vq->vq_ring.avail->flags,
+		vq->vq_ring.used->flags);
 }
 
 uint32_t virtqueue_get_desc_size(struct virtqueue *vq)
@@ -496,7 +493,7 @@ static void vq_ring_update_avail(struct virtqueue *vq, uint16_t desc_idx)
 	VRING_FLUSH(&vq->vq_ring.avail->ring[avail_idx],
 		    sizeof(vq->vq_ring.avail->ring[avail_idx]));
 
-	atomic_thread_fence(memory_order_seq_cst);
+	smp_wmb();
 
 	vq->vq_ring.avail->idx++;
 
@@ -528,7 +525,7 @@ static int vq_ring_enable_interrupt(struct virtqueue *vq, uint16_t ndesc)
 			    sizeof(vq->vq_ring.used->flags));
 	}
 
-	atomic_thread_fence(memory_order_seq_cst);
+	smp_wmb();
 
 	/*
 	 * Enough items may have already been consumed to meet our threshold
@@ -549,7 +546,7 @@ static int vq_ring_enable_interrupt(struct virtqueue *vq, uint16_t ndesc)
  */
 void virtqueue_notification(struct virtqueue *vq)
 {
-	atomic_thread_fence(memory_order_seq_cst);
+	smp_wmb();
 	if (vq->callback)
 		vq->callback(vq);
 }

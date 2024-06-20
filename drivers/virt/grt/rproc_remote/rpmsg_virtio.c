@@ -8,11 +8,11 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#include <metal/alloc.h>
-#include <metal/sleep.h>
-#include <metal/utilities.h>
-#include <openamp/rpmsg_virtio.h>
-#include <openamp/virtqueue.h>
+#include <linux/delay.h>
+#include <linux/mod_devicetable.h>
+
+#include "rpmsg_virtio.h"
+#include "virtqueue.h"
 
 #include "rpmsg_internal.h"
 
@@ -53,9 +53,11 @@
  * @idx:  virtio descriptor index containing the buffer information.
  */
 struct vbuff_reclaimer_t {
-	struct metal_list node;
+	struct list_head node;
 	uint16_t idx;
 };
+
+#define RPMSG_VIRTIO_DEFAULT_CONFIG          NULL
 
 void rpmsg_virtio_init_shm_pool(struct rpmsg_virtio_shm_pool *shpool, void *shb,
 				size_t size)
@@ -80,14 +82,13 @@ void rpmsg_virtio_init_shm_pool(struct rpmsg_virtio_shm_pool *shpool, void *shb,
 static void rpmsg_virtio_return_buffer(struct rpmsg_virtio_device *rvdev,
 				       void *buffer, uint32_t len, uint16_t idx)
 {
-	unsigned int role = rpmsg_virtio_get_role(rvdev);
 	int ret;
 
 	BUFFER_INVALIDATE(buffer, len);
 
 	(void)buffer;
 	ret = virtqueue_add_consumed_buffer(rvdev->rvq, idx, len);
-	RPMSG_ASSERT(ret == VQUEUE_SUCCESS, "add consumed buffer failed\r\n");
+	BUG_ON(ret != VQUEUE_SUCCESS);
 }
 
 /**
@@ -105,8 +106,6 @@ static void rpmsg_virtio_return_buffer(struct rpmsg_virtio_device *rvdev,
 static int rpmsg_virtio_enqueue_buffer(struct rpmsg_virtio_device *rvdev,
 				       void *buffer, uint32_t len, uint16_t idx)
 {
-	unsigned int role = rpmsg_virtio_get_role(rvdev);
-
 	BUFFER_FLUSH(buffer, len);
 
 	(void)buffer;
@@ -127,17 +126,13 @@ static int rpmsg_virtio_enqueue_buffer(struct rpmsg_virtio_device *rvdev,
 static void *rpmsg_virtio_get_tx_buffer(struct rpmsg_virtio_device *rvdev,
 					uint32_t *len, uint16_t *idx)
 {
-	unsigned int role = rpmsg_virtio_get_role(rvdev);
-	struct metal_list *node;
 	struct vbuff_reclaimer_t *r_desc;
 	void *data = NULL;
 
 	/* Try first to recycle a buffer that has been freed without been used */
-	node = metal_list_first(&rvdev->reclaimer);
-	if (node) {
-		r_desc = metal_container_of(node, struct vbuff_reclaimer_t,
-					    node);
-		metal_list_del(node);
+	r_desc = list_first_entry_or_null(&rvdev->reclaimer, struct vbuff_reclaimer_t, node);
+	if (r_desc) {
+		list_del(&r_desc->node);
 		*idx = r_desc->idx;
 		*len = virtqueue_get_buffer_length(rvdev->svq, *idx);
 	} else {
@@ -161,7 +156,6 @@ static void *rpmsg_virtio_get_tx_buffer(struct rpmsg_virtio_device *rvdev,
 static void *rpmsg_virtio_get_rx_buffer(struct rpmsg_virtio_device *rvdev,
 					uint32_t *len, uint16_t *idx)
 {
-	unsigned int role = rpmsg_virtio_get_role(rvdev);
 	void *data = NULL;
 
 	data = virtqueue_get_available_buffer(rvdev->rvq, idx, len);
@@ -201,7 +195,7 @@ static int rpmsg_virtio_wait_remote_ready(struct rpmsg_virtio_device *rvdev)
 			return 0;
 		}
 		/* TODO: clarify metal_cpu_yield usage*/
-		metal_cpu_yield();
+		schedule();
 	}
 }
 
@@ -218,7 +212,7 @@ static bool rpmsg_virtio_buf_held_dec_test(struct rpmsg_hdr *rp_hdr)
 {
 	/* Check the held counter first */
 	if (RPMSG_BUF_HELD_COUNTER(rp_hdr) <= 0) {
-		metal_err("unexpected buffer held counter\r\n");
+		pr_err("unexpected buffer held counter\r\n");
 		return false;
 	}
 
@@ -234,9 +228,9 @@ static bool rpmsg_virtio_buf_held_dec_test(struct rpmsg_hdr *rp_hdr)
 
 static void rpmsg_virtio_hold_rx_buffer(struct rpmsg_device *rdev, void *rxbuf)
 {
-	metal_mutex_acquire(&rdev->lock);
+	mutex_lock(&rdev->lock);
 	RPMSG_BUF_HELD_INC(RPMSG_LOCATE_HDR(rxbuf));
-	metal_mutex_release(&rdev->lock);
+	mutex_unlock(&rdev->lock);
 }
 
 static bool
@@ -261,16 +255,16 @@ static void rpmsg_virtio_release_rx_buffer(struct rpmsg_device *rdev,
 	struct rpmsg_virtio_device *rvdev;
 	struct rpmsg_hdr *rp_hdr;
 
-	rvdev = metal_container_of(rdev, struct rpmsg_virtio_device, rdev);
+	rvdev = container_of(rdev, struct rpmsg_virtio_device, rdev);
 	rp_hdr = RPMSG_LOCATE_HDR(rxbuf);
 
-	metal_mutex_acquire(&rdev->lock);
+	mutex_lock(&rdev->lock);
 	if (rpmsg_virtio_buf_held_dec_test(rp_hdr)) {
 		rpmsg_virtio_release_rx_buffer_nolock(rvdev, rp_hdr);
 		/* Tell peer we return some rx buffers */
 		virtqueue_kick(rvdev->rvq);
 	}
-	metal_mutex_release(&rdev->lock);
+	mutex_unlock(&rdev->lock);
 }
 
 static int rpmsg_virtio_notify_wait(struct rpmsg_virtio_device *rvdev,
@@ -297,7 +291,7 @@ static void *rpmsg_virtio_get_tx_payload_buffer(struct rpmsg_device *rdev,
 	int status;
 
 	/* Get the associated remote device for channel. */
-	rvdev = metal_container_of(rdev, struct rpmsg_virtio_device, rdev);
+	rvdev = container_of(rdev, struct rpmsg_virtio_device, rdev);
 
 	/* Validate device state */
 	status = virtio_get_status(rvdev->vdev, &virtio_status);
@@ -311,9 +305,9 @@ static void *rpmsg_virtio_get_tx_payload_buffer(struct rpmsg_device *rdev,
 
 	while (1) {
 		/* Lock the device to enable exclusive access to virtqueues */
-		metal_mutex_acquire(&rdev->lock);
+		mutex_lock(&rdev->lock);
 		rp_hdr = rpmsg_virtio_get_tx_buffer(rvdev, len, &idx);
-		metal_mutex_release(&rdev->lock);
+		mutex_unlock(&rdev->lock);
 		if (rp_hdr || !tick_count)
 			break;
 
@@ -323,7 +317,7 @@ static void *rpmsg_virtio_get_tx_payload_buffer(struct rpmsg_device *rdev,
 		 */
 		status = rpmsg_virtio_notify_wait(rvdev, rvdev->rvq);
 		if (status == RPMSG_EOPNOTSUPP) {
-			metal_sleep_usec(RPMSG_TICKS_PER_INTERVAL);
+			msleep(1/*RPMSG_TICKS_PER_INTERVAL*/);
 			tick_count--;
 		} else if (status == RPMSG_SUCCESS) {
 			break;
@@ -349,7 +343,6 @@ static int rpmsg_virtio_send_offchannel_nocopy(struct rpmsg_device *rdev,
 					       const void *data, int len)
 {
 	struct rpmsg_virtio_device *rvdev;
-	struct metal_io_region *io;
 	struct rpmsg_hdr rp_hdr;
 	struct rpmsg_hdr *hdr;
 	uint32_t buff_len;
@@ -357,7 +350,7 @@ static int rpmsg_virtio_send_offchannel_nocopy(struct rpmsg_device *rdev,
 	int status;
 
 	/* Get the associated remote device for channel. */
-	rvdev = metal_container_of(rdev, struct rpmsg_virtio_device, rdev);
+	rvdev = container_of(rdev, struct rpmsg_virtio_device, rdev);
 
 	hdr = RPMSG_LOCATE_HDR(data);
 	/* The reserved field contains buffer index */
@@ -371,22 +364,19 @@ static int rpmsg_virtio_send_offchannel_nocopy(struct rpmsg_device *rdev,
 	rp_hdr.flags = 0;
 
 	/* Copy data to rpmsg buffer. */
-	io = rvdev->shbuf_io;
-	status = metal_io_block_write(io, metal_io_virt_to_offset(io, hdr),
-				      &rp_hdr, sizeof(rp_hdr));
-	RPMSG_ASSERT(status == sizeof(rp_hdr), "failed to write header\r\n");
+	memcpy(hdr, &rp_hdr, sizeof(rp_hdr));
 
-	metal_mutex_acquire(&rdev->lock);
+	mutex_lock(&rdev->lock);
 
 	buff_len = virtqueue_get_buffer_length(rvdev->svq, idx);
 
 	/* Enqueue buffer on virtqueue. */
 	status = rpmsg_virtio_enqueue_buffer(rvdev, hdr, buff_len, idx);
-	RPMSG_ASSERT(status == VQUEUE_SUCCESS, "failed to enqueue buffer\r\n");
+	BUG_ON(status != VQUEUE_SUCCESS);
 	/* Let the other side know that there is a job to process. */
 	virtqueue_kick(rvdev->svq);
 
-	metal_mutex_release(&rdev->lock);
+	mutex_unlock(&rdev->lock);
 
 	return len;
 }
@@ -400,9 +390,9 @@ static int rpmsg_virtio_release_tx_buffer(struct rpmsg_device *rdev,
 		rp_hdr; /* only used to avoid warning on the cast of a packed structure */
 	struct vbuff_reclaimer_t *r_desc = (struct vbuff_reclaimer_t *)vbuff;
 
-	rvdev = metal_container_of(rdev, struct rpmsg_virtio_device, rdev);
+	rvdev = container_of(rdev, struct rpmsg_virtio_device, rdev);
 
-	metal_mutex_acquire(&rdev->lock);
+	mutex_lock(&rdev->lock);
 
 	/* Check whether to release the Tx buffer */
 	if (rpmsg_virtio_buf_held_dec_test(rp_hdr)) {
@@ -411,10 +401,11 @@ static int rpmsg_virtio_release_tx_buffer(struct rpmsg_device *rdev,
 		 * Store the index locally before overwriting the RPMsg header.
 		 */
 		r_desc->idx = RPMSG_BUF_INDEX(rp_hdr);
-		metal_list_add_tail(&rvdev->reclaimer, &r_desc->node);
+		INIT_LIST_HEAD(&r_desc->node);
+		list_add_tail(&r_desc->node, &rvdev->reclaimer);
 	}
 
-	metal_mutex_release(&rdev->lock);
+	mutex_unlock(&rdev->lock);
 
 	return RPMSG_SUCCESS;
 }
@@ -439,13 +430,11 @@ static int rpmsg_virtio_send_offchannel_raw(struct rpmsg_device *rdev,
 					    const void *data, int len, int wait)
 {
 	struct rpmsg_virtio_device *rvdev;
-	struct metal_io_region *io;
 	uint32_t buff_len;
 	void *buffer;
-	int status;
 
 	/* Get the associated remote device for channel. */
-	rvdev = metal_container_of(rdev, struct rpmsg_virtio_device, rdev);
+	rvdev = container_of(rdev, struct rpmsg_virtio_device, rdev);
 
 	/* Get the payload buffer. */
 	buffer = rpmsg_virtio_get_tx_payload_buffer(rdev, &buff_len, wait);
@@ -455,10 +444,8 @@ static int rpmsg_virtio_send_offchannel_raw(struct rpmsg_device *rdev,
 	/* Copy data to rpmsg buffer. */
 	if (len > (int)buff_len)
 		len = buff_len;
-	io = rvdev->shbuf_io;
-	status = metal_io_block_write(io, metal_io_virt_to_offset(io, buffer),
-				      data, len);
-	RPMSG_ASSERT(status == len, "failed to write buffer\r\n");
+
+	memcpy(buffer, data, len);
 
 	return rpmsg_virtio_send_offchannel_nocopy(rdev, src, dst, buffer, len);
 }
@@ -494,22 +481,22 @@ static void rpmsg_virtio_rx_callback(struct virtqueue *vq)
 	uint16_t idx;
 	int status;
 
-	metal_mutex_acquire(&rdev->lock);
+	mutex_lock(&rdev->lock);
 
 	/* Process the received data from remote node */
 	rp_hdr = rpmsg_virtio_get_rx_buffer(rvdev, &len, &idx);
 
-	metal_mutex_release(&rdev->lock);
+	mutex_unlock(&rdev->lock);
 
 	while (rp_hdr) {
 		rp_hdr->reserved = idx;
 
 		/* Get the channel node from the remote device channels list. */
-		metal_mutex_acquire(&rdev->lock);
+		mutex_lock(&rdev->lock);
 		ept = rpmsg_get_ept_from_addr(rdev, rp_hdr->dst);
 		rpmsg_ept_incref(ept);
 		RPMSG_BUF_HELD_INC(rp_hdr);
-		metal_mutex_release(&rdev->lock);
+		mutex_unlock(&rdev->lock);
 
 		if (ept) {
 			if (ept->dest_addr == RPMSG_ADDR_ANY) {
@@ -522,11 +509,10 @@ static void rpmsg_virtio_rx_callback(struct virtqueue *vq)
 			status = ept->cb(ept, RPMSG_LOCATE_DATA(rp_hdr),
 					 rp_hdr->len, rp_hdr->src, ept->priv);
 
-			RPMSG_ASSERT(status >= 0,
-				     "unexpected callback status\r\n");
+			BUG_ON(status < 0);
 		}
 
-		metal_mutex_acquire(&rdev->lock);
+		mutex_lock(&rdev->lock);
 		rpmsg_ept_decref(ept);
 		if (rpmsg_virtio_buf_held_dec_test(rp_hdr))
 			rpmsg_virtio_release_rx_buffer_nolock(rvdev, rp_hdr);
@@ -536,7 +522,7 @@ static void rpmsg_virtio_rx_callback(struct virtqueue *vq)
 			/* tell peer we return some rx buffer */
 			virtqueue_kick(rvdev->rvq);
 		}
-		metal_mutex_release(&rdev->lock);
+		mutex_unlock(&rdev->lock);
 	}
 }
 
@@ -558,8 +544,6 @@ static int rpmsg_virtio_ns_callback(struct rpmsg_endpoint *ept, void *data,
 				    size_t len, uint32_t src, void *priv)
 {
 	struct rpmsg_device *rdev = ept->rdev;
-	struct rpmsg_virtio_device *rvdev = (struct rpmsg_virtio_device *)rdev;
-	struct metal_io_region *io = rvdev->shbuf_io;
 	struct rpmsg_endpoint *_ept;
 	struct rpmsg_ns_msg *ns_msg;
 	uint32_t dest;
@@ -573,12 +557,12 @@ static int rpmsg_virtio_ns_callback(struct rpmsg_endpoint *ept, void *data,
 	if (len != sizeof(*ns_msg))
 		/* Returns as the message is corrupted */
 		return RPMSG_SUCCESS;
-	metal_io_block_read(io, metal_io_virt_to_offset(io, ns_msg->name),
-			    &name, sizeof(name));
+
+	memcpy(name, ns_msg->name, sizeof(name));
 	dest = ns_msg->addr;
 
 	/* check if a Ept has been locally registered */
-	metal_mutex_acquire(&rdev->lock);
+	mutex_lock(&rdev->lock);
 	_ept = rpmsg_get_endpoint(rdev, name, RPMSG_ADDR_ANY, dest);
 
 	/*
@@ -592,15 +576,15 @@ static int rpmsg_virtio_ns_callback(struct rpmsg_endpoint *ept, void *data,
 			_ept->dest_addr = RPMSG_ADDR_ANY;
 		if (ept_to_release)
 			rpmsg_ept_incref(_ept);
-		metal_mutex_release(&rdev->lock);
+		mutex_unlock(&rdev->lock);
 		if (_ept && _ept->ns_unbind_cb)
 			_ept->ns_unbind_cb(_ept);
 		if (rdev->ns_unbind_cb)
 			rdev->ns_unbind_cb(rdev, name, dest);
 		if (ept_to_release) {
-			metal_mutex_acquire(&rdev->lock);
+			mutex_lock(&rdev->lock);
 			rpmsg_ept_decref(_ept);
-			metal_mutex_release(&rdev->lock);
+			mutex_lock(&rdev->lock);
 		}
 	} else {
 		if (!_ept) {
@@ -610,12 +594,12 @@ static int rpmsg_virtio_ns_callback(struct rpmsg_endpoint *ept, void *data,
 			 * - store information for future use.
 			 * - just ignore the request as service not supported.
 			 */
-			metal_mutex_release(&rdev->lock);
+			mutex_unlock(&rdev->lock);
 			if (rdev->ns_bind_cb)
 				rdev->ns_bind_cb(rdev, name, dest);
 		} else {
 			_ept->dest_addr = dest;
-			metal_mutex_release(&rdev->lock);
+			mutex_unlock(&rdev->lock);
 		}
 	}
 
@@ -631,7 +615,7 @@ int rpmsg_virtio_get_tx_buffer_size(struct rpmsg_device *rdev)
 	if (!rdev)
 		return RPMSG_ERR_PARAM;
 
-	metal_mutex_acquire(&rdev->lock);
+	mutex_lock(&rdev->lock);
 	rvdev = (struct rpmsg_virtio_device *)rdev;
 	role = rpmsg_virtio_get_role(rvdev);
 
@@ -645,7 +629,7 @@ int rpmsg_virtio_get_tx_buffer_size(struct rpmsg_device *rdev)
 	if (size <= 0)
 		size = RPMSG_ERR_NO_BUFF;
 
-	metal_mutex_release(&rdev->lock);
+	mutex_unlock(&rdev->lock);
 
 	return size;
 }
@@ -659,7 +643,7 @@ int rpmsg_virtio_get_rx_buffer_size(struct rpmsg_device *rdev)
 	if (!rdev)
 		return RPMSG_ERR_PARAM;
 
-	metal_mutex_acquire(&rdev->lock);
+	mutex_lock(&rdev->lock);
 	rvdev = (struct rpmsg_virtio_device *)rdev;
 	role = rpmsg_virtio_get_role(rvdev);
 
@@ -673,7 +657,7 @@ int rpmsg_virtio_get_rx_buffer_size(struct rpmsg_device *rdev)
 	if (size <= 0)
 		size = RPMSG_ERR_NO_BUFF;
 
-	metal_mutex_release(&rdev->lock);
+	mutex_unlock(&rdev->lock);
 
 	return size;
 }
@@ -706,7 +690,7 @@ int rpmsg_init_vdev_with_config(struct rpmsg_virtio_device *rvdev,
 
 	rdev = &rvdev->rdev;
 	memset(rdev, 0, sizeof(*rdev));
-	metal_mutex_init(&rdev->lock);
+	mutex_init(&rdev->lock);
 	rvdev->vdev = vdev;
 	rdev->ns_bind_cb = ns_bind_cb;
 	vdev->priv = rvdev;
@@ -737,7 +721,7 @@ int rpmsg_init_vdev_with_config(struct rpmsg_virtio_device *rvdev,
 	callback[0] = rpmsg_virtio_tx_callback;
 	callback[1] = rpmsg_virtio_rx_callback;
 	rvdev->shbuf_io = shm_io;
-	metal_list_init(&rvdev->reclaimer);
+	INIT_LIST_HEAD(&rvdev->reclaimer);
 
 	/* Create virtqueues for remote device */
 	status = virtio_create_virtqueues(rvdev->vdev, 0, RPMSG_NUM_VRINGS,
@@ -763,7 +747,7 @@ int rpmsg_init_vdev_with_config(struct rpmsg_virtio_device *rvdev,
 	}
 
 	/* Initialize channels and endpoints list */
-	metal_list_init(&rdev->endpoints);
+	INIT_LIST_HEAD(&rdev->endpoints);
 
 	/*
 	 * Create name service announcement endpoint if device supports name
@@ -780,16 +764,12 @@ int rpmsg_init_vdev_with_config(struct rpmsg_virtio_device *rvdev,
 
 void rpmsg_deinit_vdev(struct rpmsg_virtio_device *rvdev)
 {
-	struct metal_list *node;
 	struct rpmsg_device *rdev;
-	struct rpmsg_endpoint *ept;
+	struct rpmsg_endpoint *ept, *tmp;
 
 	if (rvdev) {
 		rdev = &rvdev->rdev;
-		while (!metal_list_is_empty(&rdev->endpoints)) {
-			node = rdev->endpoints.next;
-			ept = metal_container_of(node, struct rpmsg_endpoint,
-						 node);
+		list_for_each_entry_safe(ept, tmp, &rdev->endpoints, node) {
 			rpmsg_destroy_ept(ept);
 		}
 
@@ -797,6 +777,5 @@ void rpmsg_deinit_vdev(struct rpmsg_virtio_device *rvdev)
 		rvdev->svq = 0;
 
 		virtio_delete_virtqueues(rvdev->vdev);
-		metal_mutex_deinit(&rdev->lock);
 	}
 }

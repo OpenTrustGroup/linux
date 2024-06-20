@@ -13,17 +13,11 @@
 #ifndef __METAL_UTILITIES__H__
 #define __METAL_UTILITIES__H__
 
-#include <stdint.h>
-#include <limits.h>
-#include <metal/assert.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /** \defgroup utilities Simple Utilities
  *  @{
  */
+
+#define CHAR_BIT 8
 
 #ifndef MB
 #define MB (1024UL << 10UL)
@@ -157,9 +151,5 @@ static inline unsigned long metal_log2(unsigned long in)
 }
 
 /** @} */
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* __METAL_UTILITIES__H__ */

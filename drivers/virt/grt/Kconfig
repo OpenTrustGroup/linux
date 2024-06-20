@@ -37,3 +37,5 @@ config GRT_VHOST_BLK
 
 	  To compile this driver as a module, choose M here: the module will
 	  be called vhost_blk.
+
+source "drivers/virt/grt/rproc_remote/Kconfig"

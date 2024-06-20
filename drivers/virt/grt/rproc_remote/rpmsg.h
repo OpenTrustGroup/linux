@@ -12,20 +12,17 @@
 #ifndef _RPMSG_H_
 #define _RPMSG_H_
 
-#include <metal/compiler.h>
-#include <metal/mutex.h>
-#include <metal/list.h>
-#include <metal/utilities.h>
-#include <string.h>
-#include <stdbool.h>
-#include <stdint.h>
+#include <linux/list.h>
+#include <linux/mutex.h>
+#include <linux/compiler.h>
 
-#if defined __cplusplus
-extern "C" {
-#endif
+#include "utility.h"
+
+// rename symbol to avoid conflict with linux's
+#define rpmsg_create_ept _rpmsg_create_ept
+#define rpmsg_destroy_ept _rpmsg_destroy_ept
 
 /* Configurable parameters */
-#define RPMSG_NAME_SIZE			(32)
 #define RPMSG_ADDR_BMP_SIZE		(128)
 
 #define RPMSG_NS_EPT_ADDR		(0x35)
@@ -91,7 +88,7 @@ struct rpmsg_endpoint {
 	rpmsg_ns_unbind_cb ns_unbind_cb;
 
 	/** Endpoint node */
-	struct metal_list node;
+	struct list_head node;
 
 	/** Private data for the driver's use */
 	void *priv;
@@ -126,7 +123,7 @@ struct rpmsg_device_ops {
 /** @brief Representation of a RPMsg device */
 struct rpmsg_device {
 	/** List of endpoints */
-	struct metal_list endpoints;
+	struct list_head endpoints;
 
 	/** Name service endpoint */
 	struct rpmsg_endpoint ns_ept;
@@ -136,7 +133,7 @@ struct rpmsg_device {
 	unsigned int bitnext;
 
 	/** Mutex lock for RPMsg management */
-	metal_mutex_t lock;
+	struct mutex lock;
 
 	/** Callback handler for name service announcement without local epts waiting to bind */
 	rpmsg_ns_bind_cb ns_bind_cb;
@@ -569,10 +566,6 @@ static inline unsigned int is_rpmsg_ept_ready(struct rpmsg_endpoint *ept)
 {
 	return ept && ept->rdev && ept->dest_addr != RPMSG_ADDR_ANY;
 }
-
-#if defined __cplusplus
-}
-#endif
 
 #endif				/* _RPMSG_H_ */
 

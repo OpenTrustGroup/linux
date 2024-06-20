@@ -4,7 +4,8 @@
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
-#include <openamp/virtio.h>
+#include <linux/mod_devicetable.h>
+#include "virtio.h"
 
 static const char *virtio_feature_name(unsigned long feature,
 				       const struct virtio_feature_desc *);

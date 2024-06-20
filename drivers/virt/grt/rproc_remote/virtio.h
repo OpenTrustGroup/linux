@@ -7,9 +7,10 @@
 #ifndef _VIRTIO_H_
 #define _VIRTIO_H_
 
-#include <openamp/virtqueue.h>
-#include <metal/errno.h>
-#include <metal/spinlock.h>
+#include "virtqueue.h"
+
+#include <linux/device.h>
+#include <linux/sched.h>
 
 #if defined __cplusplus
 extern "C" {
@@ -55,7 +56,6 @@ extern "C" {
 #define VIRTIO_ID_BT             40UL
 #define VIRTIO_ID_GPIO           41UL
 #define VIRTIO_ID_RDMA           42UL
-#define VIRTIO_DEV_ANY_ID        -1UL
 
 /* Status byte for guest to report progress. */
 #define VIRTIO_CONFIG_STATUS_RESET       0x00
@@ -94,18 +94,6 @@ __deprecated static inline int deprecated_virtio_dev_slave(void)
 #define VIRTIO_DEVICE_ONLY
 #warning "VIRTIO_SLAVE_ONLY is deprecated, please use VIRTIO_DEVICE_ONLY"
 #endif
-
-/** @brief Virtio device identifier. */
-struct virtio_device_id {
-	/** Virtio subsystem device ID. */
-	uint32_t device;
-
-	/** Virtio subsystem vendor ID. */
-	uint32_t vendor;
-
-	/** Virtio subsystem device version. */
-	uint32_t version;
-};
 
 /*
  * Generate interrupt when the virtqueue ring is

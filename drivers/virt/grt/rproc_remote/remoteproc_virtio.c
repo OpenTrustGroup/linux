@@ -182,7 +182,6 @@ rproc_virtio_create_vdev(unsigned int role, unsigned int notifyid,
 	struct virtio_device *vdev;
 	unsigned int num_vrings = vdev_rsc->num_of_vrings;
 
-	pr_debug("num_vrings %d\n", num_vrings);
 	rpvdev = kzalloc(sizeof(*rpvdev), GFP_KERNEL);
 	if (!rpvdev)
 		return NULL;

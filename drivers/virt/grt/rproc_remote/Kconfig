@@ -6,3 +6,7 @@ config GRT_REMOTEPROC_REMOTE
 config GRT_RPMSG_SAMPLE
 	depends on GRT_HYPERVISOR_SUPPORT
 	tristate "Nebula rpmsg sample code"
+
+config GRT_VIRTIO_SAMPLE
+	depends on GRT_HYPERVISOR_SUPPORT
+	tristate "Nebula virtio device sample code"

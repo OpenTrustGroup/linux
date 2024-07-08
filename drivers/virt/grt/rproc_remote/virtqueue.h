@@ -139,7 +139,7 @@ struct virtqueue {
 	 * Used by the host side during callback. Cookie holds the address of buffer received from
 	 * other side. Other fields in this structure are not used currently.
 	 */
-	struct vq_desc_extra vq_descx[0];
+	struct vq_desc_extra vq_descx[];
 };
 
 /** @brief Virtio ring specific information. */

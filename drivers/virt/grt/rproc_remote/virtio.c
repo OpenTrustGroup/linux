@@ -106,7 +106,7 @@ int virtio_create_virtqueues(struct virtio_device *vdev, unsigned int flags,
 	(void)flags;
 
 	if (!vdev)
-		return -EINVAL;
+		return ERROR_VQUEUE_INVLD_PARAM;
 
 	if (vdev->func && vdev->func->create_virtqueues) {
 		return vdev->func->create_virtqueues(vdev, flags, nvqs,

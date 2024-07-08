@@ -60,7 +60,7 @@ struct resource_table {
 	uint32_t reserved[2];
 
 	/** Array of offsets pointing at the various resource entries */
-	uint32_t offset[0];
+	uint32_t offset[];
 } __packed;
 
 /**
@@ -75,7 +75,7 @@ struct fw_rsc_hdr {
 	uint32_t type;
 
 	/** Resource data */
-	uint8_t data[0];
+	uint8_t data[];
 } __packed;
 
 /**
@@ -289,7 +289,7 @@ struct fw_rsc_vdev_vring {
  */
 struct fw_rsc_vdev {
 	/** Virtio device header has type 3 */
-	// uint32_t type;
+	uint32_t type;
 
 	/** Virtio device id (as in virtio_ids.h) */
 	uint32_t id;
@@ -326,7 +326,7 @@ struct fw_rsc_vdev {
 	uint8_t reserved[2];
 
 	/** An array of \ref num_of_vrings entries of \ref fw_rsc_vdev_vring */
-	struct fw_rsc_vdev_vring vring[0];
+	struct fw_rsc_vdev_vring vring[];
 } __packed;
 
 /**

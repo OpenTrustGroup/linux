@@ -3,21 +3,14 @@
 // Copyright (c) 2024 GoldenRiver Inc.
 
 #include "rpmsg.h"
+#include "remoteproc.h"
+#include "remoteproc_virtio.h"
 
-struct nebula_rpmsg_backend_ops {
-	// this will be invoked when a rpmsg frontend annouce a new service.
-	void (*on_bind)(struct rpmsg_device *rdev, const char *name,
-			uint32_t dest, void *priv);
-
-	// this will be invoked when a rpmsg frontend is attaching to us.
-	int (*on_create)(struct rpmsg_device *rvdev, void *priv);
+struct nebula_rproc_vdev_ops {
+	int (*on_create)(struct virtio_device *vdev, struct metal_io_region *shm_io);
+	void (*on_destroy)(struct virtio_device *vdev);
+	void (*on_reset)(struct virtio_device *vdev);
 };
 
-struct nebula_rpmsg_backend {
-	struct nebula_rpmsg_backend_ops *ops;
-	void *priv;
-};
-
-void nebula_rpmsg_backend_register(struct nebula_rpmsg_backend *backend);
-void nebula_rpmsg_backend_unregister(struct nebula_rpmsg_backend *backend);
-void *nebula_rpmsg_backend_get_priv(void);
+void nebula_rproc_register_device(const void *rsc, size_t rsc_size,
+				  struct nebula_rproc_vdev_ops *vdev_ops);

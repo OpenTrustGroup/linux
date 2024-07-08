@@ -71,7 +71,7 @@ struct vring_avail {
 	uint16_t idx;
 
 	/** The ring of descriptors */
-	uint16_t ring[0];
+	uint16_t ring[];
 } __packed;
 
 /* uint32_t is used here for ids for padding reasons. */
@@ -101,7 +101,7 @@ struct vring_used {
 	uint16_t idx;
 
 	/** The ring of descriptors */
-	struct vring_used_elem ring[0];
+	struct vring_used_elem ring[];
 } __packed;
 
 /**

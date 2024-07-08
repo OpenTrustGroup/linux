@@ -16,13 +16,12 @@
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/uaccess.h>
+#include <linux/mutex.h>
 
 #include <linux/arm-smccc.h>
 #include <linux/nebula/hvcall.h>
 
 #include "rpmsg_virtio.h"
-#include "remoteproc.h"
-#include "remoteproc_virtio.h"
 #include "nebula_rproc_remote.h"
 
 enum {
@@ -39,56 +38,14 @@ enum {
 	STATE_READY,
 };
 
-#define VIRTIO_RPMSG_F_NS    0
-#define RPMSG_VDEV_DFEATURES (1 << VIRTIO_RPMSG_F_NS)
+#define MAX_VIRTIO_DEVICES 8
 
-/* Resource table entries */
-#define NUM_VRINGS    0x02
-#define VRING_ALIGN   0x1000
-#define RING_TX	      0
-#define RING_RX	      1
-#define VRING_SIZE    256
-#define MAX_RESOURCES 8
-
-struct rpmsg_resource_table {
+struct rproc_resource_table {
 	u32 ver;
 	u32 num;
 	u32 reserved[2];
-	u32 offset[MAX_RESOURCES];
-	struct fw_rsc_hdr hdr;
-	struct fw_rsc_vdev vdev;
-	struct fw_rsc_vdev_vring vrings[NUM_VRINGS];
-	struct fw_rsc_carveout carveout;
+	u32 offset[MAX_VIRTIO_DEVICES];
 } __packed;
-
-// TODO: automatically populate rsc table from dts
-static const struct rpmsg_resource_table rpmsg_rsc_table = {
-	.ver		= 1,
-	.num            = 1,
-	.reserved       = { 0, 0 },
-	.offset         = {
-		offsetof(struct rpmsg_resource_table, hdr),
-	 },
-	.hdr.type	= RSC_VDEV,
-	.vdev		= {
-		.id		= VIRTIO_ID_RPMSG,
-		.dfeatures	= RPMSG_VDEV_DFEATURES,
-		.config_len	= 0,
-		.num_of_vrings	= NUM_VRINGS,
-	},
-	.vrings	= {
-		[RING_TX]	= {
-			.da		= FW_RSC_U32_ADDR_ANY,
-			.align		= VRING_ALIGN,
-			.num		= VRING_SIZE,
-		},
-		[RING_RX]	= {
-			.da		= FW_RSC_U32_ADDR_ANY,
-			.align		= VRING_ALIGN,
-			.num		= VRING_SIZE,
-		},
-	},
-};
 
 static void signal_irq(uint16_t irq)
 {
@@ -97,52 +54,71 @@ static void signal_irq(uint16_t irq)
 	arm_smccc_smc(SMC_FC_NBL_VHM_REQ, 0, irq, 0, 0, 0, 0, r7, &res);
 }
 
-// TODO: currently only one rpmsg device is supported
-static struct nebula_rpmsg_backend *rpmsg_backend;
-
-void nebula_rpmsg_backend_register(struct nebula_rpmsg_backend *backend)
-{
-	rpmsg_backend = backend;
-}
-EXPORT_SYMBOL(nebula_rpmsg_backend_register);
-
-void nebula_rpmsg_backend_unregister(struct nebula_rpmsg_backend *backend)
-{
-	rpmsg_backend = NULL;
-}
-EXPORT_SYMBOL(nebula_rpmsg_backend_unregister);
-
-void *nebula_rpmsg_backend_get_priv(void)
-{
-	if (rpmsg_backend)
-		return rpmsg_backend->priv;
-
-	return NULL;
-}
-EXPORT_SYMBOL(nebula_rpmsg_backend_get_priv);
-
 struct irq_info {
 	int local_virq;
 	int remote_hwirq;
 	struct virtio_vring_info *vring_info;
 };
 
+struct virtio_device_info {
+	struct virtio_device *dev;
+	struct nebula_rproc_vdev_ops *ops;
+};
 struct rproc_remote_priv {
 	void *__iomem reg_base;
 	void *shm_base;
 	size_t shm_size;
-	struct rpmsg_resource_table *rsc_table;
-	struct rpmsg_virtio_device rvdev;
-	struct virtio_device *vdev;
 	phys_addr_t host_shm_phys;
 	struct metal_io_region shm_io;
-	atomic_t rvdev_inited;
+	atomic_t vdev_ready;
 
 	struct device *dev;
 	int num_queues;
 	struct irq_info *irq_info;
 	bool notify_with_phys_irq;
+
+	struct mutex rsc_table_mutex;
+	struct virtio_device_info vdevs[MAX_VIRTIO_DEVICES];
+	void *rsc_table;
+	size_t rsc_table_offset;
+	size_t num_vdevs;
+
+	struct workqueue_struct *workq;
+	struct work_struct create_vdev_work;
 };
+
+// TODO: only one rproc device is assumed
+static struct device *rproc_device;
+
+void nebula_rproc_register_device(const void *rsc, size_t rsc_size,
+				  struct nebula_rproc_vdev_ops *vdev_ops)
+{
+	struct rproc_remote_priv *priv;
+	struct rproc_resource_table *rsc_table;
+	int vdev_idx;
+
+	BUG_ON(rproc_device == NULL);
+
+	priv = dev_get_drvdata(rproc_device);
+	mutex_lock(&priv->rsc_table_mutex);
+
+	vdev_idx = priv->num_vdevs;
+	pr_debug("register vdev%d, rsc_offset %lx, rsc_size %lx\n",
+		vdev_idx, priv->rsc_table_offset, rsc_size);
+	rsc_table = priv->rsc_table;
+	rsc_table->offset[vdev_idx] = priv->rsc_table_offset;
+	priv->vdevs[vdev_idx].ops = vdev_ops;
+
+	BUG_ON(priv->rsc_table_offset + rsc_size >= PAGE_SIZE);
+	memcpy(priv->rsc_table + priv->rsc_table_offset, rsc, rsc_size);
+
+	priv->num_vdevs++;
+	priv->rsc_table_offset += rsc_size;
+	rsc_table->num = priv->num_vdevs;
+
+	mutex_unlock(&priv->rsc_table_mutex);
+}
+EXPORT_SYMBOL(nebula_rproc_register_device);
 
 static void *rproc_paddr_to_vaddr(struct virtqueue *vq, phys_addr_t phys)
 {
@@ -151,6 +127,7 @@ static void *rproc_paddr_to_vaddr(struct virtqueue *vq, phys_addr_t phys)
 	struct rproc_remote_priv *priv = rpvdev->priv;
 
 	u32 off = phys - priv->host_shm_phys;
+	pr_debug("paddr_to_vaddr: phys: %llx, virt: %px\n", phys, priv->shm_base + off);
 	return priv->shm_base + off;
 }
 
@@ -162,20 +139,6 @@ static phys_addr_t rproc_vaddr_to_paddr(struct virtqueue *vq, void *vaddr)
 
 	u32 off = (vaddr - priv->shm_base);
 	return priv->host_shm_phys + off;
-}
-
-static void rproc_remote_ns_bind_cb(struct rpmsg_device *rdev, const char *name,
-				    uint32_t dest)
-{
-	if (rpmsg_backend && rpmsg_backend->ops &&
-	    rpmsg_backend->ops->on_bind) {
-		rpmsg_backend->ops->on_bind(rdev, name, dest,
-					    rpmsg_backend->priv);
-	}
-}
-
-static void rproc_vdev_reset_cb(struct virtio_device *vdev)
-{
 }
 
 static int rproc_vdev_notify(void *data, uint32_t notifyid)
@@ -195,90 +158,116 @@ static irqreturn_t rproc_notify_irq_handler(int irq, void *data)
 {
 	struct irq_info *info = data;
 
-	if (info->vring_info)
+	if (info->vring_info && info->vring_info->vq)
 		virtqueue_notification(info->vring_info->vq);
+
 	return IRQ_HANDLED;
 }
 
-static int create_rpmsg_vdev(struct rproc_remote_priv *priv,
-			     unsigned int notifyid,
-			     const struct fw_rsc_vdev *vdev_rsc)
+static void dump_rsc_table(struct device *dev, void *table)
 {
-	int ret, rpmsg_ret;
-	unsigned int num_vrings, i;
+	struct rproc_resource_table *rsc_table = table;
+	int i;
 
-	priv->vdev = rproc_virtio_create_vdev(VIRTIO_DEV_DEVICE, notifyid,
-					      (void *)vdev_rsc, /*rsc_io=*/NULL,
-					      priv, rproc_vdev_notify,
-					      rproc_vdev_reset_cb);
-	if (!priv->vdev) {
-		dev_err(priv->dev, "failed to create virtio vdev");
-		return -ENOMEM;
+	dev_dbg(dev, "dump_rsc_table\n");
+	dev_dbg(dev, "ver=%d\n", rsc_table->ver);
+	dev_dbg(dev, "num=%d\n", rsc_table->num);
+
+	for (i = 0; i < rsc_table->num; i++)
+	{
+		struct fw_rsc_vdev *vdev_desc;
+		u32 offset = rsc_table->offset[i];
+
+		vdev_desc = table + offset;
+		dev_dbg(dev, "vdev%d, offset=%x\n", i, rsc_table->offset[i]);
+		dev_dbg(dev, "vdev%d, type=%x", i, vdev_desc->type);
+		dev_dbg(dev, "vdev%d, num_vrings=%d", i, vdev_desc->num_of_vrings);
 	}
+}
 
-	rproc_virtio_wait_remote_ready(priv->vdev);
+static int create_rproc_vdev(struct rproc_remote_priv *priv)
+{
+	int ret;
+	unsigned int num_vrings, i, vdev_idx;
+	struct fw_rsc_vdev *vdev_rsc;
+	struct virtio_device *vdev;
+	struct rproc_resource_table *rsc_table = priv->rsc_table;
+	struct nebula_rproc_vdev_ops *vdev_ops;
 
-	/* set the notification id for vrings */
-	num_vrings = vdev_rsc->num_of_vrings;
-	for (i = 0; i < num_vrings; i++) {
-		const struct fw_rsc_vdev_vring *vring_rsc;
-		phys_addr_t da;
-		unsigned int num_descs, align;
-		struct metal_io_region *io;
-		void *va;
-		size_t size;
-		int ret;
-		uint32_t off;
-		struct irq_info *irq_info;
+	dump_rsc_table(priv->dev, priv->rsc_table);
 
-		vring_rsc = &vdev_rsc->vring[i];
-		notifyid = vring_rsc->notifyid;
-		da = vring_rsc->da;
-		dev_dbg(priv->dev, "vring%d da=%llx\n", notifyid, da);
-		num_descs = vring_rsc->num;
-		align = vring_rsc->align;
-		size = vring_size(num_descs, align);
+	for (vdev_idx = 0; vdev_idx < rsc_table->num; vdev_idx++) {
+		vdev_ops = priv->vdevs[vdev_idx].ops;
+		vdev_rsc = priv->rsc_table + rsc_table->offset[vdev_idx];
+		BUG_ON(vdev_rsc->type != RSC_VDEV);
 
-		off = da - (priv->host_shm_phys & 0xffffffff);
-		va = priv->shm_base + off;
-		ret = rproc_virtio_init_vring(priv->vdev, i, notifyid, va, io,
-					      num_descs, align);
-		if (ret)
-			goto err_free_vdev;
+		vdev = rproc_virtio_create_vdev(VIRTIO_DEV_DEVICE, vdev_idx,
+						(void *)vdev_rsc,
+						/*rsc_io=*/NULL, priv,
+						rproc_vdev_notify,
+						vdev_ops->on_reset);
+		if (!vdev) {
+			dev_err(priv->dev, "failed to create virtio vdev");
+			return -ENOMEM;
+		}
 
-		BUG_ON(notifyid >= priv->num_queues);
-		irq_info = &priv->irq_info[notifyid];
-		irq_info->vring_info = &priv->vdev->vrings_info[i];
-	}
+		rproc_virtio_wait_remote_ready(vdev);
 
-	rpmsg_ret = rpmsg_init_vdev(&priv->rvdev, priv->vdev,
-				    rproc_remote_ns_bind_cb, &priv->shm_io,
-				    NULL);
-	if (rpmsg_ret != RPMSG_SUCCESS) {
-		dev_err(priv->dev, "failed to init rpmsg device: %d\n",
-			rpmsg_ret);
-		ret = -EINVAL;
-		goto err_free_vdev;
-	}
+		/* set the notification id for vrings */
+		num_vrings = vdev_rsc->num_of_vrings;
+		for (i = 0; i < num_vrings; i++) {
+			const struct fw_rsc_vdev_vring *vring_rsc;
+			phys_addr_t da;
+			unsigned int num_descs, align;
+			struct metal_io_region *io = NULL;
+			void *va;
+			size_t size;
+			int ret;
+			uint32_t off;
+			struct irq_info *irq_info;
+			int notifyid;
 
-	if (rpmsg_backend && rpmsg_backend->ops &&
-	    rpmsg_backend->ops->on_create) {
-		rpmsg_ret = rpmsg_backend->ops->on_create(&priv->rvdev.rdev,
-							  rpmsg_backend->priv);
-		if (rpmsg_ret) {
-			ret = -EINVAL;
+			vring_rsc = &vdev_rsc->vring[i];
+			notifyid = vring_rsc->notifyid;
+			da = vring_rsc->da;
+			dev_dbg(priv->dev, "vdev%d vring%d da=%llx\n", vdev_idx,
+				notifyid, da);
+			num_descs = vring_rsc->num;
+			align = vring_rsc->align;
+			size = vring_size(num_descs, align);
+
+			off = da - (priv->host_shm_phys & 0xffffffff);
+			va = priv->shm_base + off;
+			ret = rproc_virtio_init_vring(vdev, i, notifyid, va, io,
+						      num_descs, align);
+			if (ret)
+				goto err_free_vdev;
+
+			BUG_ON(notifyid >= priv->num_queues);
+			irq_info = &priv->irq_info[notifyid];
+			irq_info->vring_info = &vdev->vrings_info[i];
+		}
+
+		BUG_ON(vdev_ops->on_create == NULL);
+		ret = vdev_ops->on_create(vdev, &priv->shm_io);
+		if (ret) {
+			dev_err(priv->dev,
+				"failed to create rproc vdev%d, ret=%d\n",
+				vdev_idx, ret);
 			goto err_free_vdev;
 		}
+
+		priv->vdevs[vdev_idx].dev = vdev;
 	}
 
 	return 0;
 
 err_free_vdev:
-	rproc_virtio_remove_vdev(priv->vdev);
+	for (i = 0; i < vdev_idx; i++)
+		rproc_virtio_remove_vdev(priv->vdevs[i].dev);
 	return ret;
 }
 
-// TODO: only one vdev is assumed
 static void rproc_vdev_init(struct rproc_remote_priv *priv)
 {
 	priv->host_shm_phys =
@@ -287,38 +276,46 @@ static void rproc_vdev_init(struct rproc_remote_priv *priv)
 		(u64)readl_relaxed(priv->reg_base + RPROC_REG_SHM_BASE_HIGH)
 		<< 32;
 
-	int ret =
-		create_rpmsg_vdev(priv, /*notifyid=*/0, &priv->rsc_table->vdev);
-	if (ret < 0) {
-		dev_err(priv->dev, "failed to create rmpsg vdev %d\n", ret);
-	} else {
-		atomic_set(&priv->rvdev_inited, true);
+	queue_work(priv->workq, &priv->create_vdev_work);
+}
+
+static void rproc_create_vdev_work(struct work_struct *work)
+{
+	struct rproc_remote_priv *priv =
+		container_of(work, struct rproc_remote_priv, create_vdev_work);
+
+	int ret = create_rproc_vdev(priv);
+	if (ret == 0) {
+		atomic_set(&priv->vdev_ready, true);
 	}
 }
 
-// TODO: only one vdev is assumed
 static void rproc_vdev_destroy(struct rproc_remote_priv *priv)
 {
-	int notifyid;
+	int notifyid, i;
 
-	if (!atomic_read(&priv->rvdev_inited))
+	if (!atomic_read(&priv->vdev_ready))
 		return;
 
-	priv->rsc_table->vdev.status = 0;
-	atomic_set(&priv->rvdev_inited, false);
+	// host is gone. remove all virtio devices
+	atomic_set(&priv->vdev_ready, false);
 
 	for (notifyid = 0; notifyid < priv->num_queues; notifyid++) {
 		struct irq_info *irq_info = &priv->irq_info[notifyid];
 		irq_info->vring_info = NULL;
 	}
 
-	dev_info(priv->dev, "destroy rpmsg\n");
-	rpmsg_deinit_vdev(&priv->rvdev);
+	for (i = 0; i < priv->num_vdevs; i++) {
+		struct virtio_device_info *vdev = &priv->vdevs[i];
 
-	dev_info(priv->dev, "destroy vdev\n");
-	rproc_virtio_remove_vdev(priv->vdev);
+		BUG_ON(vdev->ops->on_destroy == NULL);
+		vdev->ops->on_destroy(vdev->dev);
 
-	priv->vdev = NULL;
+		dev_info(priv->dev, "destroy vdev%d\n", i);
+		rproc_virtio_remove_vdev(vdev->dev);
+
+		vdev->dev = NULL;
+	}
 }
 
 static irqreturn_t rproc_ctrl_irq_handler(int irq, void *data)
@@ -330,6 +327,7 @@ static irqreturn_t rproc_ctrl_irq_handler(int irq, void *data)
 		rproc_vdev_init(priv);
 	else
 		rproc_vdev_destroy(priv);
+
 	return IRQ_HANDLED;
 }
 
@@ -343,6 +341,7 @@ static int rproc_remote_probe(struct platform_device *pdev)
 	void *shm_base;
 	size_t shm_size;
 	int i, irq_count, remote_irq_count, virq;
+	struct rproc_resource_table *rsc_table;
 
 	priv = kmalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv)
@@ -367,20 +366,22 @@ static int rproc_remote_probe(struct platform_device *pdev)
 	}
 
 	shm_size = resource_size(mem);
-	shm_base = devm_memremap(dev, mem->start, shm_size, MEMREMAP_WC);
+	shm_base = devm_memremap(dev, mem->start, shm_size, MEMREMAP_WB);
 	if (!shm_base) {
 		ret = -EINVAL;
 		goto err_unmap_reg;
 	}
+	dev_info(dev, "shared memory @ %px, size %lx\n", shm_base, shm_size);
 
 	priv->reg_base = reg_base;
 	priv->shm_base = shm_base;
 	priv->shm_size = shm_size;
-	priv->rsc_table = (struct rpmsg_resource_table *)priv->shm_base;
+	priv->rsc_table = priv->shm_base;
 	priv->dev = &pdev->dev;
 	priv->shm_io.paddr_to_vaddr = rproc_paddr_to_vaddr;
 	priv->shm_io.vaddr_to_paddr = rproc_vaddr_to_paddr;
-	atomic_set(&priv->rvdev_inited, false);
+	atomic_set(&priv->vdev_ready, false);
+	mutex_init(&priv->rsc_table_mutex);
 
 	platform_set_drvdata(pdev, priv);
 
@@ -429,7 +430,17 @@ static int rproc_remote_probe(struct platform_device *pdev)
 		BUG_ON(ret < 0);
 	}
 
-	memcpy(priv->shm_base, &rpmsg_rsc_table, sizeof(rpmsg_rsc_table));
+	rsc_table = priv->shm_base;
+	rsc_table->ver = 1;
+	priv->rsc_table_offset = sizeof(struct rproc_resource_table);
+	rproc_device = dev;
+	INIT_WORK(&priv->create_vdev_work, rproc_create_vdev_work);
+
+	priv->workq = alloc_workqueue("nebula_rproc_remote", WQ_MEM_RECLAIM, 0);
+	if (!priv->workq) {
+		ret = -ENOMEM;
+		goto err_unmap_reg;
+	}
 
 	return 0;
 

@@ -183,6 +183,75 @@ void *virtqueue_get_buffer_addr(struct virtqueue *vq, uint16_t idx)
 	return virtqueue_phys_to_virt(vq, vq->vq_ring.desc[idx].addr);
 }
 
+static unsigned next_desc(struct vring_desc *desc)
+{
+	unsigned int next;
+
+	/* If this descriptor says it doesn't chain, we're done. */
+	if (!(desc->flags & VRING_DESC_F_NEXT))
+		return -1U;
+
+	/* Check they're not leading us off end of descriptors. */
+	next = READ_ONCE(desc->next);
+	return next;
+}
+
+int virtqueue_get_vq_desc(struct virtqueue *vq, struct kvec iov[],
+			  unsigned int iov_size, unsigned int *out_num,
+			  unsigned int *in_num)
+{
+	struct vring_desc desc;
+	int i, idx = 0;
+	bool write_only = false;
+	uint16_t head, head_idx;
+
+	smp_rmb();
+
+	/* Avail.idx is updated by driver, invalidate it */
+	if (vq->vq_available_idx == vq->vq_ring.avail->idx) {
+		return ERROR_VRING_NO_BUFF;
+	}
+
+	head_idx = vq->vq_available_idx & (vq->vq_nentries - 1);
+	head = vq->vq_ring.avail->ring[head_idx];
+
+	/* When we start there are none of either input nor output. */
+	*out_num = *in_num = 0;
+
+	i = head;
+	do {
+		desc = vq->vq_ring.desc[i];
+		if (desc.flags & VRING_DESC_F_WRITE)
+			write_only = true;
+
+		iov[idx].iov_base = virtqueue_phys_to_virt(vq, desc.addr);
+		iov[idx].iov_len = desc.len;
+		pr_debug("iov[%d] iov_base=%px iov_len=%lx\n", idx,
+			 iov[idx].iov_base, iov[idx].iov_len);
+
+		if (write_only) {
+			/* If this is an input descriptor,
+			 * increment that count. */
+			(*in_num)++;
+		} else {
+			/* If it's an output descriptor, they're all supposed
+			 * to come before any input descriptors. */
+			if (unlikely(*in_num)) {
+				pr_err("Descriptor has out after in: "
+				       "idx %d\n",
+				       i);
+				return ERROR_VQUEUE_INVLD_PARAM;
+			}
+			(*out_num)++;
+		}
+
+		idx++;
+	} while ((i = next_desc(&desc)) != -1);
+
+	vq->vq_available_idx++;
+	return head;
+}
+
 void virtqueue_free(struct virtqueue *vq)
 {
 	if (vq) {

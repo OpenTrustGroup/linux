@@ -12,6 +12,7 @@
 
 #include <linux/string.h>
 #include <linux/device.h>
+#include <linux/uio.h>
 #include <linux/dma-mapping.h>
 
 #include "virtio_ring.h"
@@ -405,6 +406,10 @@ static inline int virtqueue_full(struct virtqueue *vq)
 {
 	return (vq->vq_free_cnt == 0);
 }
+
+int virtqueue_get_vq_desc(struct virtqueue *vq, struct kvec iov[],
+			  unsigned int iov_size, unsigned int *out_num,
+			  unsigned int *in_num);
 
 struct metal_io_region {
 	void* (*paddr_to_vaddr)(struct virtqueue *vq, phys_addr_t phys);

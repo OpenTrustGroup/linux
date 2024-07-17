@@ -120,15 +120,33 @@ void nebula_rproc_register_device(const void *rsc, size_t rsc_size,
 }
 EXPORT_SYMBOL(nebula_rproc_register_device);
 
+static inline bool is_shm_paddr(struct rproc_remote_priv *priv, phys_addr_t phys) {
+	return phys > priv->host_shm_phys;
+}
+
+static inline bool is_shm_vaddr(struct rproc_remote_priv *priv, void *vaddr) {
+	u64 start = (u64)priv->shm_base;
+	u64 end = (u64)(priv->shm_base + priv->shm_size);
+	u64 target = (u64)vaddr;
+	return (target > start) && (target < end);
+}
+
 static void *rproc_paddr_to_vaddr(struct virtqueue *vq, phys_addr_t phys)
 {
 	struct remoteproc_virtio *rpvdev =
 		container_of(vq->vq_dev, struct remoteproc_virtio, vdev);
 	struct rproc_remote_priv *priv = rpvdev->priv;
+	void *virt;
 
-	u32 off = phys - priv->host_shm_phys;
-	pr_debug("paddr_to_vaddr: phys: %llx, virt: %px\n", phys, priv->shm_base + off);
-	return priv->shm_base + off;
+	if (is_shm_paddr(priv, phys)) {
+		u32 off = phys - priv->host_shm_phys;
+		virt = priv->shm_base + off;
+	} else {
+		virt = phys_to_virt(phys);
+	}
+
+	pr_debug("paddr_to_vaddr: phys: %llx, virt: %px\n", phys, virt);
+	return virt;
 }
 
 static phys_addr_t rproc_vaddr_to_paddr(struct virtqueue *vq, void *vaddr)
@@ -136,9 +154,17 @@ static phys_addr_t rproc_vaddr_to_paddr(struct virtqueue *vq, void *vaddr)
 	struct remoteproc_virtio *rpvdev =
 		container_of(vq->vq_dev, struct remoteproc_virtio, vdev);
 	struct rproc_remote_priv *priv = rpvdev->priv;
+	phys_addr_t phys;
 
-	u32 off = (vaddr - priv->shm_base);
-	return priv->host_shm_phys + off;
+	if (is_shm_vaddr(priv, vaddr)) {
+		u32 off = (vaddr - priv->shm_base);
+		phys = priv->host_shm_phys + off;
+	} else {
+		phys = virt_to_phys(vaddr);
+	}
+
+	pr_debug("vaddr_to_paddr: phys: %llx, virt: %px\n", phys, vaddr);
+	return phys;
 }
 
 static int rproc_vdev_notify(void *data, uint32_t notifyid)

@@ -10,3 +10,7 @@ config GRT_RPMSG_SAMPLE
 config GRT_VIRTIO_SAMPLE
 	depends on GRT_HYPERVISOR_SUPPORT
 	tristate "Nebula virtio device sample code"
+
+config GRT_VIRTIO_VSOCKET
+	depends on GRT_HYPERVISOR_SUPPORT
+	tristate "Nebula virtio vsocket device"

@@ -1,6 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0
-//
-// Copyright (c) 2024 GoldenRiver Inc.
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * vhost transport for vsock
+ *
+ * Copyright (C) 2013-2015 Red Hat, Inc.
+ * Author: Asias He <asias@redhat.com>
+ *         Stefan Hajnoczi <stefanha@redhat.com>
+ */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
@@ -770,4 +775,6 @@ static int __init nebula_virtio_vsocket_init(void)
 }
 
 module_init(nebula_virtio_vsocket_init);
+MODULE_AUTHOR("Asias He");
+MODULE_DESCRIPTION("vhost transport for vsock");
 MODULE_LICENSE("Dual BSD/GPL");

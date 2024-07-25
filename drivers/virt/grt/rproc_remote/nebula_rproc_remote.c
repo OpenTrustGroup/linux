@@ -184,8 +184,8 @@ static irqreturn_t rproc_notify_irq_handler(int irq, void *data)
 {
 	struct irq_info *info = data;
 
-	if (info->vring_info && info->vring_info->vq)
-		virtqueue_notification(info->vring_info->vq);
+	BUG_ON(info->vring_info == NULL || info->vring_info->vq == NULL);
+	virtqueue_notification(info->vring_info->vq);
 
 	return IRQ_HANDLED;
 }
@@ -284,6 +284,18 @@ static int create_rproc_vdev(struct rproc_remote_priv *priv)
 		}
 
 		priv->vdevs[vdev_idx].dev = vdev;
+
+		// The virtqueue should be created in vdev's on_create() callback, and
+		// we should request irq only after virtqueue is created.
+		for (i = 0; i < num_vrings; i++) {
+			int notifyid = vdev_rsc->vring[i].notifyid;
+			struct irq_info *irq_info = &priv->irq_info[notifyid];
+			ret = devm_request_threaded_irq(priv->dev, irq_info->local_virq,
+							NULL, rproc_notify_irq_handler,
+							IRQF_ONESHOT,
+							dev_name(priv->dev), irq_info);
+			BUG_ON(ret < 0);
+		}
 	}
 
 	return 0;
@@ -318,7 +330,7 @@ static void rproc_create_vdev_work(struct work_struct *work)
 
 static void rproc_vdev_destroy(struct rproc_remote_priv *priv)
 {
-	int notifyid, i;
+	int i, j;
 
 	if (!atomic_read(&priv->vdev_ready))
 		return;
@@ -326,13 +338,18 @@ static void rproc_vdev_destroy(struct rproc_remote_priv *priv)
 	// host is gone. remove all virtio devices
 	atomic_set(&priv->vdev_ready, false);
 
-	for (notifyid = 0; notifyid < priv->num_queues; notifyid++) {
-		struct irq_info *irq_info = &priv->irq_info[notifyid];
-		irq_info->vring_info = NULL;
-	}
-
 	for (i = 0; i < priv->num_vdevs; i++) {
 		struct virtio_device_info *vdev = &priv->vdevs[i];
+
+		for (j = 0; j < vdev->dev->vrings_num; j++) {
+			struct irq_info *irq_info;
+			int notifyid = vdev->dev->vrings_info[j].notifyid;
+
+			irq_info = &priv->irq_info[notifyid];
+			devm_free_irq(priv->dev, irq_info->local_virq,
+				      irq_info);
+			irq_info->vring_info = NULL;
+		}
 
 		BUG_ON(vdev->ops->on_destroy == NULL);
 		vdev->ops->on_destroy(vdev->dev);
@@ -448,12 +465,6 @@ static int rproc_remote_probe(struct platform_device *pdev)
 			BUG_ON(ret < 0);
 			irq_info->remote_hwirq = hwirq;
 		}
-
-		ret = devm_request_threaded_irq(priv->dev, irq_info->local_virq,
-						NULL, rproc_notify_irq_handler,
-						IRQF_ONESHOT,
-						dev_name(priv->dev), irq_info);
-		BUG_ON(ret < 0);
 	}
 
 	rsc_table = priv->shm_base;

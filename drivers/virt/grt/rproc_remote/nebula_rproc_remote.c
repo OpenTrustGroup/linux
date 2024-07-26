@@ -340,6 +340,12 @@ static void rproc_vdev_destroy(struct rproc_remote_priv *priv)
 
 	for (i = 0; i < priv->num_vdevs; i++) {
 		struct virtio_device_info *vdev = &priv->vdevs[i];
+		struct remoteproc_virtio *rpvdev =
+			container_of(vdev->dev, struct remoteproc_virtio, vdev);
+		struct fw_rsc_vdev *rsc = rpvdev->vdev_rsc;
+
+		// reset virtio device
+		rsc->status = 0;
 
 		for (j = 0; j < vdev->dev->vrings_num; j++) {
 			struct irq_info *irq_info;
@@ -386,7 +392,7 @@ static int rproc_remote_probe(struct platform_device *pdev)
 	int i, irq_count, remote_irq_count, virq;
 	struct rproc_resource_table *rsc_table;
 
-	priv = kmalloc(sizeof(*priv), GFP_KERNEL);
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
 

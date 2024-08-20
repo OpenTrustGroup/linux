@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: GPL-2.0-only
  *
  * $FreeBSD$
  */

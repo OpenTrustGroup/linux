@@ -4,8 +4,10 @@
  * Copyright (c) 2016 Freescale Semiconductor, Inc. All rights reserved.
  * Copyright (c) 2018 Linaro, Inc. All rights reserved.
  *
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: GPL-2.0-only
  */
+
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/mod_devicetable.h>
 

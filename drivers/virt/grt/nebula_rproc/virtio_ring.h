@@ -1,7 +1,7 @@
 /*
  * Copyright Rusty Russell IBM Corporation 2007.
  *
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: GPL-2.0-only
  *
  * $FreeBSD$
  */

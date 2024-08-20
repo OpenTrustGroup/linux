@@ -5,8 +5,10 @@
  * Copyright (c) 2018 Linaro, Inc. All rights reserved.
  * Copyright (c) 2021 Nordic Semiconductor ASA
  *
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: GPL-2.0-only
  */
+
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/delay.h>
 #include <linux/mod_devicetable.h>
@@ -365,10 +367,16 @@ static int rpmsg_virtio_send_offchannel_nocopy(struct rpmsg_device *rdev,
 
 	/* Copy data to rpmsg buffer. */
 	memcpy(hdr, &rp_hdr, sizeof(rp_hdr));
+	pr_debug("TX From 0x%x, To 0x%x, Len %d, Flags %d, Reserved %d\n",
+		hdr->src, hdr->dst, hdr->len, hdr->flags, hdr->reserved);
 
 	mutex_lock(&rdev->lock);
 
 	buff_len = virtqueue_get_buffer_length(rvdev->svq, idx);
+#if defined(CONFIG_DYNAMIC_DEBUG)
+	dynamic_hex_dump("rpmsg_virtio TX: ", DUMP_PREFIX_NONE, 16, 1,
+			 hdr, sizeof(*hdr) + len, true);
+#endif
 
 	/* Enqueue buffer on virtqueue. */
 	status = rpmsg_virtio_enqueue_buffer(rvdev, hdr, buff_len, idx);
@@ -489,6 +497,8 @@ static void rpmsg_virtio_rx_callback(struct virtqueue *vq)
 	mutex_unlock(&rdev->lock);
 
 	while (rp_hdr) {
+		pr_debug("RX From 0x%x, To 0x%x, Len %d, Flags %d, Reserved %d\n",
+			rp_hdr->src, rp_hdr->dst, rp_hdr->len, rp_hdr->flags, rp_hdr->reserved);
 		rp_hdr->reserved = idx;
 
 		/* Get the channel node from the remote device channels list. */
@@ -506,6 +516,10 @@ static void rpmsg_virtio_rx_callback(struct virtqueue *vq)
 				 */
 				ept->dest_addr = rp_hdr->src;
 			}
+#ifdef CONFIG_DYNAMIC_DEBUG
+			dynamic_hex_dump("rpmsg_virtio RX: ", DUMP_PREFIX_NONE, 16, 1,
+					 rp_hdr, sizeof(*rp_hdr) + rp_hdr->len, true);
+#endif
 			status = ept->cb(ept, RPMSG_LOCATE_DATA(rp_hdr),
 					 rp_hdr->len, rp_hdr->src, ept->priv);
 
@@ -670,6 +684,7 @@ int rpmsg_init_vdev(struct rpmsg_virtio_device *rvdev,
 	return rpmsg_init_vdev_with_config(rvdev, vdev, ns_bind_cb, shm_io,
 					   shpool, RPMSG_VIRTIO_DEFAULT_CONFIG);
 }
+EXPORT_SYMBOL(rpmsg_init_vdev);
 
 int rpmsg_init_vdev_with_config(struct rpmsg_virtio_device *rvdev,
 				struct virtio_device *vdev,
@@ -761,6 +776,7 @@ int rpmsg_init_vdev_with_config(struct rpmsg_virtio_device *rvdev,
 
 	return RPMSG_SUCCESS;
 }
+EXPORT_SYMBOL(rpmsg_init_vdev_with_config);
 
 void rpmsg_deinit_vdev(struct rpmsg_virtio_device *rvdev)
 {
@@ -779,3 +795,4 @@ void rpmsg_deinit_vdev(struct rpmsg_virtio_device *rvdev)
 		virtio_delete_virtqueues(rvdev->vdev);
 	}
 }
+EXPORT_SYMBOL(rpmsg_deinit_vdev);

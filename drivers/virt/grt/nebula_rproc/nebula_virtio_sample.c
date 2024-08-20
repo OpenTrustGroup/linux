@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-only
 //
 // Copyright (c) 2024 GoldenRiver Inc.
 
@@ -175,10 +175,10 @@ int sample_device_create(struct virtio_device *vdev,
 	virtqueue_disable_cb(priv->svq);
 
 	for (i = 0; i < NUM_VRINGS; i++) {
-		struct virtqueue *vq;
+		struct virtqueue *vq = vdev->vrings_info[i].vq;
 
-		vq = vdev->vrings_info[i].vq;
-		vq->shm_io = shm_io;
+		/* the shm_io is used by phys_to_virt()/virt_to_phys() */
+		virtqueue_set_shmem_io(vq, shm_io);
 	}
 
 	vdev->priv = priv;
@@ -192,7 +192,6 @@ void sample_device_destroy(struct virtio_device *vdev)
 
 static void sample_device_reset(struct virtio_device *vdev)
 {
-	pr_debug("sample vdev reset\n");
 }
 
 static struct nebula_rproc_vdev_ops sample_vdev_ops = {

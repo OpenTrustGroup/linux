@@ -6,7 +6,7 @@
  * Copyright(c) 2011 Google, Inc.
  * All rights reserved.
  *
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: GPL-2.0-only
  */
 
 #ifndef REMOTEPROC_VIRTIO_H

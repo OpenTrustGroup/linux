@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef VIRTQUEUE_H_
 #define VIRTQUEUE_H_
 
@@ -5,7 +6,7 @@
  * Copyright (c) 2011, Bryan Venteicher <bryanv@FreeBSD.org>
  * All rights reserved.
  *
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-only
  *
  * $FreeBSD$
  */
@@ -118,6 +119,9 @@ struct virtqueue {
 	 * This structure is used for conversion between virtual and physical addresses.
 	 */
 	void *shm_io;
+
+	/** Indirect descriptor cache. */
+	struct vring_desc *indirect;
 
 	/**
 	 * Head of the free chain in the descriptor table. If there are no free descriptors,

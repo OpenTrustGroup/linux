@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-only
 //
 // Copyright (c) 2024 GoldenRiver Inc.
 
@@ -38,7 +38,7 @@ enum {
 	STATE_READY,
 };
 
-#define MAX_VIRTIO_DEVICES 8
+#define MAX_VIRTIO_DEVICES 20
 
 struct rproc_resource_table {
 	u32 ver;
@@ -85,38 +85,49 @@ struct rproc_remote_priv {
 
 	struct workqueue_struct *workq;
 	struct work_struct create_vdev_work;
+
+	struct list_head node;
 };
 
-// TODO: only one rproc device is assumed
-static struct device *rproc_device;
+LIST_HEAD(rproc_devices);
+DEFINE_MUTEX(rproc_devices_lock);
 
-void nebula_rproc_register_device(const void *rsc, size_t rsc_size,
-				  struct nebula_rproc_vdev_ops *vdev_ops)
+int nebula_rproc_register_device(const void *rsc, size_t rsc_size,
+				 struct nebula_rproc_vdev_ops *vdev_ops)
 {
 	struct rproc_remote_priv *priv;
 	struct rproc_resource_table *rsc_table;
 	int vdev_idx;
 
-	BUG_ON(rproc_device == NULL);
+	mutex_lock(&rproc_devices_lock);
 
-	priv = dev_get_drvdata(rproc_device);
-	mutex_lock(&priv->rsc_table_mutex);
+	if (list_empty(&rproc_devices)) {
+		mutex_unlock(&rproc_devices_lock);
+		return -ENODEV;
+	}
 
-	vdev_idx = priv->num_vdevs;
-	pr_debug("register vdev%d, rsc_offset %lx, rsc_size %lx\n",
-		vdev_idx, priv->rsc_table_offset, rsc_size);
-	rsc_table = priv->rsc_table;
-	rsc_table->offset[vdev_idx] = priv->rsc_table_offset;
-	priv->vdevs[vdev_idx].ops = vdev_ops;
+	list_for_each_entry(priv, &rproc_devices, node) {
+		mutex_lock(&priv->rsc_table_mutex);
 
-	BUG_ON(priv->rsc_table_offset + rsc_size >= PAGE_SIZE);
-	memcpy(priv->rsc_table + priv->rsc_table_offset, rsc, rsc_size);
+		vdev_idx = priv->num_vdevs;
+		pr_debug("register vdev%d, rsc_offset %lx, rsc_size %lx\n",
+			 vdev_idx, priv->rsc_table_offset, rsc_size);
+		rsc_table = priv->rsc_table;
+		rsc_table->offset[vdev_idx] = priv->rsc_table_offset;
+		priv->vdevs[vdev_idx].ops = vdev_ops;
 
-	priv->num_vdevs++;
-	priv->rsc_table_offset += rsc_size;
-	rsc_table->num = priv->num_vdevs;
+		BUG_ON(priv->rsc_table_offset + rsc_size >= PAGE_SIZE);
+		memcpy(priv->rsc_table + priv->rsc_table_offset, rsc, rsc_size);
 
-	mutex_unlock(&priv->rsc_table_mutex);
+		priv->num_vdevs++;
+		priv->rsc_table_offset += rsc_size;
+		rsc_table->num = priv->num_vdevs;
+
+		mutex_unlock(&priv->rsc_table_mutex);
+	}
+
+	mutex_unlock(&rproc_devices_lock);
+	return 0;
 }
 EXPORT_SYMBOL(nebula_rproc_register_device);
 
@@ -219,6 +230,11 @@ static int create_rproc_vdev(struct rproc_remote_priv *priv)
 	struct virtio_device *vdev;
 	struct rproc_resource_table *rsc_table = priv->rsc_table;
 	struct nebula_rproc_vdev_ops *vdev_ops;
+	cpumask_t mask;
+
+	// bind rproc irq to vcpu4
+	cpumask_clear(&mask);
+	cpumask_set_cpu(4, &mask);
 
 	dump_rsc_table(priv->dev, priv->rsc_table);
 
@@ -238,6 +254,9 @@ static int create_rproc_vdev(struct rproc_remote_priv *priv)
 		}
 
 		rproc_virtio_wait_remote_ready(vdev);
+		/* The dfeatures has been updated after remote driver is ready,
+		 * we should apply it to local vdev->features */
+		vdev->features = vdev_rsc->dfeatures;
 
 		/* set the notification id for vrings */
 		num_vrings = vdev_rsc->num_of_vrings;
@@ -295,6 +314,7 @@ static int create_rproc_vdev(struct rproc_remote_priv *priv)
 							IRQF_ONESHOT,
 							dev_name(priv->dev), irq_info);
 			BUG_ON(ret < 0);
+			irq_set_affinity_hint(irq_info->local_virq, &mask);
 		}
 	}
 
@@ -352,6 +372,7 @@ static void rproc_vdev_destroy(struct rproc_remote_priv *priv)
 			int notifyid = vdev->dev->vrings_info[j].notifyid;
 
 			irq_info = &priv->irq_info[notifyid];
+			irq_set_affinity_hint(irq_info->local_virq, NULL);
 			devm_free_irq(priv->dev, irq_info->local_virq,
 				      irq_info);
 			irq_info->vring_info = NULL;
@@ -391,6 +412,7 @@ static int rproc_remote_probe(struct platform_device *pdev)
 	size_t shm_size;
 	int i, irq_count, remote_irq_count, virq;
 	struct rproc_resource_table *rsc_table;
+	cpumask_t mask;
 
 	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv)
@@ -445,11 +467,16 @@ static int rproc_remote_probe(struct platform_device *pdev)
 		BUG_ON(remote_irq_count != irq_count - 1);
 	}
 
+	// bind rproc irq to vcpu4
+	cpumask_clear(&mask);
+	cpumask_set_cpu(4, &mask);
+
 	virq = platform_get_irq(pdev, 0);
 	ret = devm_request_threaded_irq(&pdev->dev, virq, NULL,
 					rproc_ctrl_irq_handler, IRQF_ONESHOT,
 					dev_name(&pdev->dev), priv);
 	BUG_ON(ret < 0);
+	irq_set_affinity_hint(virq, &mask);
 
 	priv->num_queues = irq_count - 1;
 	priv->irq_info =
@@ -476,14 +503,18 @@ static int rproc_remote_probe(struct platform_device *pdev)
 	rsc_table = priv->shm_base;
 	rsc_table->ver = 1;
 	priv->rsc_table_offset = sizeof(struct rproc_resource_table);
-	rproc_device = dev;
 	INIT_WORK(&priv->create_vdev_work, rproc_create_vdev_work);
+	INIT_LIST_HEAD(&priv->node);
 
 	priv->workq = alloc_workqueue("nebula_rproc_remote", WQ_MEM_RECLAIM, 0);
 	if (!priv->workq) {
 		ret = -ENOMEM;
 		goto err_unmap_reg;
 	}
+
+	mutex_lock(&rproc_devices_lock);
+	list_add(&priv->node, &rproc_devices);
+	mutex_unlock(&rproc_devices_lock);
 
 	return 0;
 

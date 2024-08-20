@@ -6,7 +6,7 @@
  * All rights reserved.
  * Copyright (c) 2016 Freescale Semiconductor, Inc. All rights reserved.
  *
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: GPL-2.0-only
  */
 
 #ifndef _RPMSG_VIRTIO_H_

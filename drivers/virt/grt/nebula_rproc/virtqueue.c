@@ -2,8 +2,10 @@
  * Copyright (c) 2011, Bryan Venteicher <bryanv@FreeBSD.org>
  * All rights reserved.
  *
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-only
  */
+
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/string.h>
 #include <linux/mod_devicetable.h>
@@ -40,6 +42,15 @@ static inline phys_addr_t virtqueue_virt_to_phys(struct virtqueue *vq,
 	return io->vaddr_to_paddr(vq, buf);
 }
 
+static int virtqueue_alloc_indirect(struct virtqueue *vq)
+{
+	vq->indirect = kmalloc_array(UIO_MAXIOV,
+			sizeof(struct vring_desc), GFP_KERNEL);
+	if (!vq->indirect)
+		return ERROR_NO_MEM;
+	return VQUEUE_SUCCESS;
+}
+
 int virtqueue_create(struct virtio_device *virt_dev, unsigned short id,
 		     const char *name, struct vring_alloc_info *ring,
 		     void (*callback)(struct virtqueue *vq),
@@ -62,6 +73,9 @@ int virtqueue_create(struct virtio_device *virt_dev, unsigned short id,
 		vq->vq_free_cnt = vq->vq_nentries;
 		vq->callback = callback;
 		vq->notify = notify;
+		status = virtqueue_alloc_indirect(vq);
+		if (status != VQUEUE_SUCCESS)
+			return status;
 
 		/* Initialize vring control block in virtqueue. */
 		vq_ring_init(vq, ring->vaddr, ring->align);
@@ -74,6 +88,7 @@ int virtqueue_create(struct virtio_device *virt_dev, unsigned short id,
 
 	return status;
 }
+EXPORT_SYMBOL(virtqueue_create);
 
 int virtqueue_add_buffer(struct virtqueue *vq, struct virtqueue_buf *buf_list,
 			 int readable, int writable, void *cookie)
@@ -129,6 +144,7 @@ int virtqueue_add_buffer(struct virtqueue *vq, struct virtqueue_buf *buf_list,
 
 	return status;
 }
+EXPORT_SYMBOL(virtqueue_add_buffer);
 
 void *virtqueue_get_buffer(struct virtqueue *vq, uint32_t *len, uint16_t *idx)
 {
@@ -168,6 +184,7 @@ void *virtqueue_get_buffer(struct virtqueue *vq, uint32_t *len, uint16_t *idx)
 
 	return cookie;
 }
+EXPORT_SYMBOL(virtqueue_get_buffer);
 
 uint32_t virtqueue_get_buffer_length(struct virtqueue *vq, uint16_t idx)
 {
@@ -175,6 +192,7 @@ uint32_t virtqueue_get_buffer_length(struct virtqueue *vq, uint16_t idx)
 			 sizeof(vq->vq_ring.desc[idx].len));
 	return vq->vq_ring.desc[idx].len;
 }
+EXPORT_SYMBOL(virtqueue_get_buffer_length);
 
 void *virtqueue_get_buffer_addr(struct virtqueue *vq, uint16_t idx)
 {
@@ -182,6 +200,7 @@ void *virtqueue_get_buffer_addr(struct virtqueue *vq, uint16_t idx)
 			 sizeof(vq->vq_ring.desc[idx].addr));
 	return virtqueue_phys_to_virt(vq, vq->vq_ring.desc[idx].addr);
 }
+EXPORT_SYMBOL(virtqueue_get_buffer_addr);
 
 static unsigned next_desc(struct vring_desc *desc)
 {
@@ -200,32 +219,51 @@ int virtqueue_get_vq_desc(struct virtqueue *vq, struct kvec iov[],
 			  unsigned int iov_size, unsigned int *out_num,
 			  unsigned int *in_num)
 {
-	struct vring_desc desc;
+	struct vring_desc *descp, desc;
 	int i, idx = 0;
 	bool write_only = false;
 	uint16_t head, head_idx;
-
-	smp_rmb();
+	bool indirect;
 
 	/* Avail.idx is updated by driver, invalidate it */
 	if (vq->vq_available_idx == vq->vq_ring.avail->idx) {
 		return ERROR_VRING_NO_BUFF;
 	}
 
+	smp_mb();
+
 	head_idx = vq->vq_available_idx & (vq->vq_nentries - 1);
 	head = vq->vq_ring.avail->ring[head_idx];
+
+	indirect = !!(vq->vq_ring.desc[head].flags & VRING_DESC_F_INDIRECT);
+	if (indirect) {
+		void *va;
+		BUG_ON(!vq->indirect);
+		descp = &vq->vq_ring.desc[head];
+		if (descp->len > UIO_MAXIOV * sizeof(struct vring_desc)) {
+			pr_err("count of descriptor exceed max limit!\n");
+			return ERROR_VRING_MAX_DESC;
+		}
+		va = virtqueue_phys_to_virt(vq, descp->addr);
+		memcpy(vq->indirect, va, descp->len);
+	}
 
 	/* When we start there are none of either input nor output. */
 	*out_num = *in_num = 0;
 
-	i = head;
+	i = indirect ? 0 : head;
 	do {
-		desc = vq->vq_ring.desc[i];
-		if (desc.flags & VRING_DESC_F_WRITE)
-			write_only = true;
+		if (indirect)
+			descp = &vq->indirect[i];
+		else {
+			desc = vq->vq_ring.desc[i];
+			descp = &desc;
+		}
 
-		iov[idx].iov_base = virtqueue_phys_to_virt(vq, desc.addr);
-		iov[idx].iov_len = desc.len;
+		write_only = !!(descp->flags & VRING_DESC_F_WRITE);
+
+		iov[idx].iov_base = virtqueue_phys_to_virt(vq, descp->addr);
+		iov[idx].iov_len = descp->len;
 		pr_debug("iov[%d] iov_base=%px iov_len=%lx\n", idx,
 			 iov[idx].iov_base, iov[idx].iov_len);
 
@@ -246,11 +284,12 @@ int virtqueue_get_vq_desc(struct virtqueue *vq, struct kvec iov[],
 		}
 
 		idx++;
-	} while ((i = next_desc(&desc)) != -1);
+	} while ((i = next_desc(descp)) != -1);
 
 	vq->vq_available_idx++;
 	return head;
 }
+EXPORT_SYMBOL(virtqueue_get_vq_desc);
 
 void virtqueue_free(struct virtqueue *vq)
 {
@@ -263,6 +302,7 @@ void virtqueue_free(struct virtqueue *vq)
 		kfree(vq);
 	}
 }
+EXPORT_SYMBOL(virtqueue_free);
 
 void *virtqueue_get_available_buffer(struct virtqueue *vq, uint16_t *avail_idx,
 				     uint32_t *len)
@@ -297,6 +337,7 @@ void *virtqueue_get_available_buffer(struct virtqueue *vq, uint16_t *avail_idx,
 
 	return buffer;
 }
+EXPORT_SYMBOL(virtqueue_get_available_buffer);
 
 int virtqueue_add_consumed_buffer(struct virtqueue *vq, uint16_t head_idx,
 				  uint32_t len)
@@ -320,7 +361,8 @@ int virtqueue_add_consumed_buffer(struct virtqueue *vq, uint16_t head_idx,
 	VRING_FLUSH(&vq->vq_ring.used->ring[used_idx],
 		    sizeof(vq->vq_ring.used->ring[used_idx]));
 
-	smp_wmb();
+	/* Make sure buffer is written before we update index. */
+	smp_mb();
 
 	vq->vq_ring.used->idx++;
 
@@ -334,11 +376,13 @@ int virtqueue_add_consumed_buffer(struct virtqueue *vq, uint16_t head_idx,
 
 	return VQUEUE_SUCCESS;
 }
+EXPORT_SYMBOL(virtqueue_add_consumed_buffer);
 
 int virtqueue_enable_cb(struct virtqueue *vq)
 {
 	return vq_ring_enable_interrupt(vq, 0);
 }
+EXPORT_SYMBOL(virtqueue_enable_cb);
 
 void virtqueue_disable_cb(struct virtqueue *vq)
 {
@@ -355,15 +399,18 @@ void virtqueue_disable_cb(struct virtqueue *vq)
 			    sizeof(vq->vq_ring.used->flags));
 	}
 
+	smp_mb();
+
 	VQUEUE_IDLE(vq);
 }
+EXPORT_SYMBOL(virtqueue_disable_cb);
 
 void virtqueue_kick(struct virtqueue *vq)
 {
 	VQUEUE_BUSY(vq);
 
 	/* Ensure updated avail->idx is visible to host. */
-	smp_wmb();
+	smp_mb();
 
 	if (vq_ring_must_notify(vq))
 		vq_ring_notify(vq);
@@ -372,6 +419,7 @@ void virtqueue_kick(struct virtqueue *vq)
 
 	VQUEUE_IDLE(vq);
 }
+EXPORT_SYMBOL(virtqueue_kick);
 
 void virtqueue_dump(struct virtqueue *vq)
 {
@@ -381,7 +429,7 @@ void virtqueue_dump(struct virtqueue *vq)
 	VRING_INVALIDATE(&vq->vq_ring.avail, sizeof(vq->vq_ring.avail));
 	VRING_INVALIDATE(&vq->vq_ring.used, sizeof(vq->vq_ring.used));
 
-	pr_info("VQ: %s - size=%d; free=%d; queued=%d; desc_head_idx=%d; "
+	pr_debug("VQ: %s - size=%d; free=%d; queued=%d; desc_head_idx=%d; "
 		"available_idx=%d; avail.idx=%d; used_cons_idx=%d; "
 		"used.idx=%d; avail.flags=0x%x; used.flags=0x%x\r\n",
 		vq->vq_name, vq->vq_nentries, vq->vq_free_cnt,
@@ -390,6 +438,7 @@ void virtqueue_dump(struct virtqueue *vq)
 		vq->vq_ring.used->idx, vq->vq_ring.avail->flags,
 		vq->vq_ring.used->flags);
 }
+EXPORT_SYMBOL(virtqueue_dump);
 
 uint32_t virtqueue_get_desc_size(struct virtqueue *vq)
 {
@@ -423,6 +472,7 @@ uint32_t virtqueue_get_desc_size(struct virtqueue *vq)
 
 	return len;
 }
+EXPORT_SYMBOL(virtqueue_get_desc_size);
 
 /**************************************************************************
  *                            Helper Functions                            *
@@ -594,7 +644,7 @@ static int vq_ring_enable_interrupt(struct virtqueue *vq, uint16_t ndesc)
 			    sizeof(vq->vq_ring.used->flags));
 	}
 
-	smp_wmb();
+	smp_mb();
 
 	/*
 	 * Enough items may have already been consumed to meet our threshold
@@ -616,9 +666,10 @@ static int vq_ring_enable_interrupt(struct virtqueue *vq, uint16_t ndesc)
 void virtqueue_notification(struct virtqueue *vq)
 {
 	smp_wmb();
-	if (vq->callback)
+	if (vq && vq->callback)
 		vq->callback(vq);
 }
+EXPORT_SYMBOL(virtqueue_notification);
 
 /*
  *
@@ -636,6 +687,7 @@ static int vq_ring_must_notify(struct virtqueue *vq)
 		VRING_INVALIDATE(&vring_used_event(&vq->vq_ring),
 				 sizeof(vring_used_event(&vq->vq_ring)));
 		event_idx = vring_used_event(&vq->vq_ring);
+		mb();
 		return vring_need_event(event_idx, new_idx, prev_idx) != 0;
 	} else {
 		VRING_INVALIDATE(&vq->vq_ring.avail->flags,

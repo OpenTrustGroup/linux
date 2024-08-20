@@ -21,4 +21,4 @@ obj-y += acrn/
 obj-y += acrn_nbl/
 obj-y += vhost/
 obj-y += vhost_dmabuf/
-obj-y += rproc_remote/
+obj-y += nebula_rproc/

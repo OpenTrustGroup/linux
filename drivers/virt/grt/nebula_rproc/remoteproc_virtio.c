@@ -6,8 +6,10 @@
  * Copyright(c) 2011 Google, Inc.
  * All rights reserved.
  *
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: GPL-2.0-only
  */
+
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/mod_devicetable.h>
 
@@ -185,6 +187,7 @@ rproc_virtio_create_vdev(unsigned int role, unsigned int notifyid,
 	rpvdev = kzalloc(sizeof(*rpvdev), GFP_KERNEL);
 	if (!rpvdev)
 		return NULL;
+
 	vrings_info = kzalloc(sizeof(*vrings_info) * num_vrings, GFP_KERNEL);
 	if (!vrings_info)
 		goto err;

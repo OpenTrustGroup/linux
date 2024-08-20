@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-only
 //
 // Copyright (c) 2024 GoldenRiver Inc.
 
@@ -12,5 +12,5 @@ struct nebula_rproc_vdev_ops {
 	void (*on_reset)(struct virtio_device *vdev);
 };
 
-void nebula_rproc_register_device(const void *rsc, size_t rsc_size,
-				  struct nebula_rproc_vdev_ops *vdev_ops);
+int nebula_rproc_register_device(const void *rsc, size_t rsc_size,
+				 struct nebula_rproc_vdev_ops *vdev_ops);

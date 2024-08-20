@@ -2,8 +2,11 @@
  * Copyright (c) 2011, Bryan Venteicher <bryanv@FreeBSD.org>
  * All rights reserved.
  *
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-only
  */
+
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/mod_devicetable.h>
 #include "virtio.h"
 
@@ -129,4 +132,5 @@ int virtio_create_virtqueues(struct virtio_device *vdev, unsigned int flags,
 	}
 	return 0;
 }
+EXPORT_SYMBOL(virtio_create_virtqueues);
 

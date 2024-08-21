@@ -252,4 +252,7 @@ int acrn_trace_init(void);
 void acrn_trace_exit(void);
 int acrn_hvlog_init(void);
 void acrn_hvlog_exit(void);
+
+int acrn_ioventfd_hwirq_notify(int fd, u32 hwirq);
+int acrn_irqfd_hwirq(struct acrn_vm *vm, int fd, u32 hwirq);
 #endif /* __ACRN_HSM_DRV_H */

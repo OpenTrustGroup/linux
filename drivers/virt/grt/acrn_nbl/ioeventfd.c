@@ -13,6 +13,7 @@
 #include <linux/slab.h>
 
 #include "acrn_drv.h"
+#include "irq_notify.h"
 
 /**
  * struct hsm_ioeventfd - Properties of HSM ioeventfd
@@ -267,7 +268,21 @@ void acrn_ioeventfd_deinit(struct acrn_vm *vm)
 	dev_dbg(acrn_dev.this_device, "VM %u ioeventfd deinit.\n", vm->vmid);
 	acrn_ioreq_client_destroy(vm->ioeventfd_client);
 	mutex_lock(&vm->ioeventfds_lock);
-	list_for_each_entry_safe(p, next, &vm->ioeventfds, list)
+	list_for_each_entry_safe(p, next, &vm->ioeventfds, list) {
+		acrn_unregister_irq_notify(p->eventfd);
 		acrn_ioeventfd_shutdown(vm, p);
+	}
 	mutex_unlock(&vm->ioeventfds_lock);
+}
+
+int acrn_ioventfd_hwirq_notify(int fd, u32 hwirq)
+{
+	struct eventfd_ctx *eventfd;
+
+	eventfd = eventfd_ctx_fdget(fd);
+	if (IS_ERR(eventfd))
+		return PTR_ERR(eventfd);
+
+	acrn_register_irq_notify(eventfd, hwirq);
+	return 0;
 }

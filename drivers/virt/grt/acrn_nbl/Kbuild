@@ -17,4 +17,5 @@ acrn_nbl-y += mm.o
 acrn_nbl-y += ioreq.o
 acrn_nbl-y += ioeventfd.o
 acrn_nbl-y += irqfd.o
+acrn_nbl-y += irq_notify.o
 

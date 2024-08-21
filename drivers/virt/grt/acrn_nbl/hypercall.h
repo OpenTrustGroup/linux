@@ -316,4 +316,13 @@ static inline long hcall_setup_sbuf(unsigned long sbuf_head)
 	return acrn_hypercall1(HC_SETUP_SBUF, sbuf_head);
 }
 
+static inline long hcall_trigger_interrupt(uint32_t interrupt)
+{
+	struct arm_smccc_res res;
+	unsigned long r7 = SMC_HYP_SECURE_ID << 16;
+
+	arm_smccc_smc(SMC_FC_NBL_VHM_REQ, 0, interrupt, 0, 0, 0, 0, r7, &res);
+	return res.a0;
+}
+
 #endif /* __ACRN_HSM_HYPERCALL_H */

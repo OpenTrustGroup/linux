@@ -26,6 +26,8 @@
 
 #include "acrn_drv.h"
 
+#include "irq_notify.h"
+
 /*
  * When /dev/acrn_hsm is opened, a 'struct acrn_vm' object is created to
  * represent a VM instance and continues to be associated with the opened file
@@ -540,6 +542,22 @@ static long acrn_dev_ioctl(struct file *filp, unsigned int cmd,
 		}
 		break;
 	}
+	case ACRN_IOCTL_HW_IRQ_NOTIFY: {
+		struct acrn_hwirq_notify notify;
+		if (copy_from_user(&notify, (void *)ioctl_param,
+				   sizeof(struct acrn_hwirq_notify)))
+			return -EFAULT;
+		ret = acrn_ioventfd_hwirq_notify(notify.kick_fd, notify.hwirq);
+		break;
+	}
+	case ACRN_IOCTL_HW_IRQFD: {
+		struct acrn_hw_irqfd irqfd;
+		if (copy_from_user(&irqfd, (void *)ioctl_param,
+				   sizeof(struct acrn_hw_irqfd)))
+			return -EFAULT;
+		ret = acrn_irqfd_hwirq(vm, irqfd.call_fd, irqfd.hwirq);
+		break;
+	}
 	default:
 		dev_dbg(acrn_dev.this_device, "Unknown IOCTL 0x%x!\n", cmd);
 		ret = -ENOTTY;
@@ -650,6 +668,9 @@ static int __init hsm_init(void)
 		misc_deregister(&acrn_dev);
 		return ret;
 	}
+
+	acrn_init_irq_notify();
+
 	return 0;
 }
 

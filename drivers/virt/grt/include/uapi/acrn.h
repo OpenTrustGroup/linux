@@ -627,6 +627,15 @@ struct acrn_async_ioreqs {
 	struct acrn_async_ioreq_item items[ACRN_ASYNC_IOREQ_MAX];
 } __attribute__((aligned(8)));
 
+struct acrn_hwirq_notify {
+	int kick_fd;
+	uint32_t hwirq;
+};
+struct acrn_hw_irqfd {
+	int call_fd;
+	uint32_t hwirq;
+};
+
 /* The ioctl type, documented in ioctl-number.rst */
 #define ACRN_IOCTL_TYPE			0xA2
 
@@ -709,5 +718,9 @@ struct acrn_async_ioreqs {
 
 #define ACRN_IOCTL_ASYNC_IOREQS	\
 	_IOW(ACRN_IOCTL_TYPE, 0xA0, struct acrn_async_ioreqs)
+#define ACRN_IOCTL_HW_IRQ_NOTIFY \
+	_IOW(ACRN_IOCTL_TYPE, 0xA1, struct acrn_hwirq_notify)
+#define ACRN_IOCTL_HW_IRQFD \
+	_IOW(ACRN_IOCTL_TYPE, 0xA2, struct acrn_hw_irqfd)
 
 #endif /* _UAPI_ACRN_H */

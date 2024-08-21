@@ -42,14 +42,18 @@ struct hsm_irqfd {
 	struct list_head	list;
 	poll_table		pt;
 	struct acrn_msi_entry	msi;
+	int hwirq;
 };
 
 static void acrn_irqfd_inject(struct hsm_irqfd *irqfd)
 {
 	struct acrn_vm *vm = irqfd->vm;
 
-	acrn_msi_inject(vm, irqfd->msi.msi_addr,
-			irqfd->msi.msi_data);
+	if (irqfd->hwirq > 0) {
+		hcall_trigger_interrupt(irqfd->hwirq);
+		return;
+	}
+	acrn_msi_inject(vm, irqfd->msi.msi_addr, irqfd->msi.msi_data);
 }
 
 static void hsm_irqfd_shutdown(struct hsm_irqfd *irqfd)
@@ -237,4 +241,24 @@ void acrn_irqfd_deinit(struct acrn_vm *vm)
 	list_for_each_entry_safe(irqfd, next, &vm->irqfds, list)
 		hsm_irqfd_shutdown(irqfd);
 	mutex_unlock(&vm->irqfds_lock);
+}
+
+int acrn_irqfd_hwirq(struct acrn_vm *vm, int fd, u32 hwirq)
+{
+	struct hsm_irqfd *irqfd, *next;
+	struct eventfd_ctx *eventfd;
+
+	eventfd = eventfd_ctx_fdget(fd);
+	if (IS_ERR(eventfd))
+		return PTR_ERR(eventfd);
+
+	mutex_lock(&vm->irqfds_lock);
+	list_for_each_entry_safe (irqfd, next, &vm->irqfds, list) {
+		if (irqfd->eventfd == eventfd) {
+			irqfd->hwirq = hwirq;
+		}
+	}
+	mutex_unlock(&vm->irqfds_lock);
+
+	return 0;
 }

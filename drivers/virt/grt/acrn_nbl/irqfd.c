@@ -256,6 +256,8 @@ int acrn_irqfd_hwirq(struct acrn_vm *vm, int fd, u32 hwirq)
 	list_for_each_entry_safe (irqfd, next, &vm->irqfds, list) {
 		if (irqfd->eventfd == eventfd) {
 			irqfd->hwirq = hwirq;
+			dev_dbg(acrn_dev.this_device,
+				"regsitered hwirq %d for irqfd\n", hwirq);
 		}
 	}
 	mutex_unlock(&vm->irqfds_lock);

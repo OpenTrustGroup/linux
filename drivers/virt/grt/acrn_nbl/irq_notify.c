@@ -8,9 +8,11 @@ struct irq_notify {
 	struct eventfd_ctx *ioevent_fd;
 	uint32_t irq;
 	spinlock_t lock;
+	struct list_head node;
 };
 
-static struct irq_notify s_irq_notify;
+static LIST_HEAD(s_notify_irqs);
+static DEFINE_MUTEX(s_notify_irqs_lock);
 
 static irqreturn_t irq_notify_handler(int irq, void *data)
 {
@@ -28,61 +30,75 @@ static irqreturn_t irq_notify_handler(int irq, void *data)
 
 void acrn_init_irq_notify(void)
 {
-	struct device_node *notify_node;
+	struct device_node *np = NULL;
 	struct irq_desc *desc;
-	int irq;
-	int ret;
 
-	notify_node = of_find_compatible_node(NULL, NULL, "acrn,irq_notify");
-	if (notify_node == NULL) {
-		pr_err("Failed to find acrn,irq_notify node.\n");
-		return;
-	}
+	while ((np = of_find_compatible_node(np, NULL, "acrn,irq_notify")) !=
+	       NULL) {
+		struct irq_notify *irq_notify;
+		int i, irq, ret;
+		int irq_count = of_irq_count(np);
 
-	irq = of_irq_get(notify_node, 0);
-	if (!irq) {
-		pr_err("Failed to parse acrn,irq_notify's irq:%d\n", irq);
-		return;
-	}
+		for (i = 0; i < irq_count; i++) {
+			irq = of_irq_get(np, i);
+			BUG_ON(irq < 0);
 
-	desc = irq_to_desc(irq);
-	if (desc == NULL) {
-		pr_err("Failed to find irq desc:%d\n", irq);
-		return;
-	}
-	s_irq_notify.irq = desc->irq_data.hwirq;
-	spin_lock_init(&s_irq_notify.lock);
-	ret = request_irq(irq, irq_notify_handler, IRQF_TRIGGER_HIGH,
-			  "acrn,irq-notify", (void *)&s_irq_notify);
-	if (ret) {
-		pr_err("Failed to request irq handler:%d\n", ret);
-	}
+			desc = irq_to_desc(irq);
+			BUG_ON(desc == NULL);
 
-	return;
+			irq_notify = kzalloc(sizeof(*irq_notify), GFP_KERNEL);
+			BUG_ON(irq_notify == NULL);
+
+			irq_notify->irq = desc->irq_data.hwirq;
+			spin_lock_init(&irq_notify->lock);
+
+			mutex_lock(&s_notify_irqs_lock);
+			list_add(&irq_notify->node, &s_notify_irqs);
+			mutex_unlock(&s_notify_irqs_lock);
+
+			ret = request_irq(irq, irq_notify_handler,
+					  IRQF_TRIGGER_HIGH, "acrn,irq-notify",
+					  (void *)irq_notify);
+			BUG_ON(ret != 0);
+		}
+
+		of_node_put(np);
+	}
 }
 
 void acrn_register_irq_notify(struct eventfd_ctx *ioevent_fd, uint32_t irq)
 {
 	ulong flags;
+	struct irq_notify *irq_notify;
 
-	if (s_irq_notify.irq == irq) {
-		if (s_irq_notify.ioevent_fd != NULL) {
-			pr_err("Failed to register irq notify:%u\n", irq);
+	list_for_each_entry(irq_notify, &s_notify_irqs, node) {
+		if (irq_notify->irq == irq) {
+			if (irq_notify->ioevent_fd != NULL) {
+				pr_err("Failed to register irq notify:%u\n",
+				       irq);
+				return;
+			}
+			spin_lock_irqsave(&irq_notify->lock, flags);
+			irq_notify->ioevent_fd = ioevent_fd;
+			spin_unlock_irqrestore(&irq_notify->lock, flags);
+
+			dev_dbg(acrn_dev.this_device,
+				"regsitered hwirq %d for ioeventfd\n", irq);
 			return;
 		}
-		spin_lock_irqsave(&s_irq_notify.lock, flags);
-		s_irq_notify.ioevent_fd = ioevent_fd;
-		spin_unlock_irqrestore(&s_irq_notify.lock, flags);
 	}
 }
 
 void acrn_unregister_irq_notify(struct eventfd_ctx *ioevent_fd)
 {
 	ulong flags;
+	struct irq_notify *irq_notify;
 
-	if (s_irq_notify.ioevent_fd == ioevent_fd) {
-		spin_lock_irqsave(&s_irq_notify.lock, flags);
-		s_irq_notify.ioevent_fd = NULL;
-		spin_unlock_irqrestore(&s_irq_notify.lock, flags);
+	list_for_each_entry(irq_notify, &s_notify_irqs, node) {
+		if (irq_notify->ioevent_fd == ioevent_fd) {
+			spin_lock_irqsave(&irq_notify->lock, flags);
+			irq_notify->ioevent_fd = NULL;
+			spin_unlock_irqrestore(&irq_notify->lock, flags);
+		}
 	}
 }

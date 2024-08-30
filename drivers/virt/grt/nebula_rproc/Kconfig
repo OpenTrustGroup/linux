@@ -15,6 +15,10 @@ config GRT_VIRTIO_VSOCKET
 	depends on GRT_HYPERVISOR_SUPPORT
 	tristate "Nebula virtio vsocket device"
 
+config GRT_VIRTIO_VNET
+	depends on GRT_HYPERVISOR_SUPPORT
+	tristate "Nebula virtio vnet device"
+
 config GRT_REMOTEPROC_HOST
 	depends on GRT_HYPERVISOR_SUPPORT
 	tristate "Nebula remoteproc host support"

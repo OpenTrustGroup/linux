@@ -73,12 +73,15 @@ int virtqueue_create(struct virtio_device *virt_dev, unsigned short id,
 		vq->vq_free_cnt = vq->vq_nentries;
 		vq->callback = callback;
 		vq->notify = notify;
+		mutex_init(&vq->mutex);
+
 		status = virtqueue_alloc_indirect(vq);
 		if (status != VQUEUE_SUCCESS)
 			return status;
 
 		/* Initialize vring control block in virtqueue. */
 		vq_ring_init(vq, ring->vaddr, ring->align);
+		vq->heads = vq->vq_ring.used->ring;
 	}
 
 	/*
@@ -290,6 +293,49 @@ int virtqueue_get_vq_desc(struct virtqueue *vq, struct kvec iov[],
 	return head;
 }
 EXPORT_SYMBOL(virtqueue_get_vq_desc);
+
+/* return true if we're sure that avaiable ring is empty */
+bool virtqueue_avail_empty(struct virtqueue *vq)
+{
+	return (vq->vq_available_idx == vq->vq_ring.avail->idx);
+}
+EXPORT_SYMBOL_GPL(virtqueue_avail_empty);
+
+/* Reverse the effect of vhost_get_vq_desc. Useful for error handling. */
+void virtqueue_discard_vq_desc(struct virtqueue *vq, int n)
+{
+	vq->vq_available_idx -= n;
+}
+EXPORT_SYMBOL_GPL(virtqueue_discard_vq_desc);
+
+/* And here's the combo meal deal.  Supersize me! */
+void virtqueue_add_used_and_signal(struct virtqueue *vq,
+				   unsigned int head, int len)
+{
+	virtqueue_add_consumed_buffer(vq, head, len);
+	virtqueue_kick(vq);
+}
+EXPORT_SYMBOL_GPL(virtqueue_add_used_and_signal);
+
+void virtqueue_add_used_and_signal_n(struct virtqueue *vq,
+				     struct vring_used_elem *heads, int n)
+{
+	int i;
+
+	for (i = 0; i < n; i++) {
+		struct vring_used_elem *head = &heads[i];
+		virtqueue_add_consumed_buffer(vq, head->id, head->len);
+	}
+	virtqueue_kick(vq);
+}
+EXPORT_SYMBOL_GPL(virtqueue_add_used_and_signal_n);
+
+bool virtqueue_has_feature(struct virtqueue *vq, int bit)
+{
+	struct virtio_device *vdev = vq->vq_dev;
+	return vdev->features & (1ULL << bit);
+}
+EXPORT_SYMBOL(virtqueue_has_feature);
 
 void virtqueue_free(struct virtqueue *vq)
 {

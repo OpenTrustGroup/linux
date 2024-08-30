@@ -2,7 +2,7 @@
 //
 // Copyright (c) 2024 GoldenRiver Inc.
 
-#include "rpmsg.h"
+// #include "rpmsg.h"
 #include "remoteproc.h"
 #include "remoteproc_virtio.h"
 

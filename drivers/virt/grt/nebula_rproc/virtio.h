@@ -11,10 +11,14 @@
 
 #include <linux/device.h>
 #include <linux/sched.h>
+#include <linux/mod_devicetable.h>
 
 #if defined __cplusplus
 extern "C" {
 #endif
+
+typedef uint16_t __virtio16;
+typedef uint32_t __virtio32;
 
 /* VirtIO device IDs. */
 #define VIRTIO_ID_NETWORK        1UL

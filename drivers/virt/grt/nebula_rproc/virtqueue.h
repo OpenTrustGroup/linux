@@ -18,6 +18,8 @@
 
 #include "virtio_ring.h"
 
+struct vhost_poll;
+
 // rename symbol to avoid conflict with linux's
 #define virtqueue_disable_cb _virtqueue_disable_cb
 #define virtqueue_enable_cb _virtqueue_enable_cb
@@ -139,6 +141,13 @@ struct virtqueue {
 	/** Debug counter for virtqueue reentrance check. */
 	bool vq_inuse;
 #endif
+
+	/** vhost related */
+	unsigned long busyloop_timeout;
+	struct mutex mutex;
+	struct kvec iov[UIO_MAXIOV];
+	struct vhost_poll *poll;
+	struct vring_used_elem *heads;
 
 	/**
 	 * Used by the host side during callback. Cookie holds the address of buffer received from
@@ -414,6 +423,14 @@ static inline int virtqueue_full(struct virtqueue *vq)
 int virtqueue_get_vq_desc(struct virtqueue *vq, struct kvec iov[],
 			  unsigned int iov_size, unsigned int *out_num,
 			  unsigned int *in_num);
+
+bool virtqueue_avail_empty(struct virtqueue *vq);
+void virtqueue_add_used_and_signal(struct virtqueue *vq,
+				   unsigned int head, int len);
+void virtqueue_add_used_and_signal_n(struct virtqueue *vq,
+				    struct vring_used_elem *heads, int n);
+void virtqueue_discard_vq_desc(struct virtqueue *vq, int n);
+bool virtqueue_has_feature(struct virtqueue *vq, int bit);
 
 struct metal_io_region {
 	void* (*paddr_to_vaddr)(struct virtqueue *vq, phys_addr_t phys);

@@ -9,4 +9,6 @@ obj-$(CONFIG_GRT_VIRTIO_SAMPLE)	+= nebula_virtio_sample.o
 
 obj-$(CONFIG_GRT_VIRTIO_VSOCKET)	+= virtio_vsock.o
 
+obj-$(CONFIG_GRT_VIRTIO_VNET)		+= virtio_vnet.o
+
 obj-$(CONFIG_GRT_REMOTEPROC_HOST)	+= nebula_rproc_host.o

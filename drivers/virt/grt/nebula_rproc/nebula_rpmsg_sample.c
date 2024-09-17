@@ -58,7 +58,7 @@ static const struct rpmsg_device_descriptor rpmsg_desc = {
 #define MSG_COUNT 10
 #define MSG_SIZE  64
 
-#define DEV_RPMSG_NUM 16
+#define DEV_RPMSG_NUM 2
 
 struct rpmsg_device_priv {
 	struct rpmsg_virtio_device rvdev;

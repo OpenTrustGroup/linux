@@ -7,8 +7,6 @@
 
 #include <linux/compat.h>
 #include <linux/eventfd.h>
-// #include <linux/vhost.h>
-// #include <linux/virtio_net.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -23,7 +21,6 @@
 #include <linux/net.h>
 #include <linux/if_packet.h>
 #include <linux/if_arp.h>
-// #include <linux/if_tun.h>
 #include <linux/if_macvlan.h>
 #include <linux/if_tap.h>
 #include <linux/if_vlan.h>

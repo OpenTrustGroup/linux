@@ -42,13 +42,25 @@ static inline phys_addr_t virtqueue_virt_to_phys(struct virtqueue *vq,
 	return io->vaddr_to_paddr(vq, buf);
 }
 
-static int virtqueue_alloc_indirect(struct virtqueue *vq)
+static int virtqueue_alloc_buffers(struct virtqueue *vq)
 {
 	vq->indirect = kmalloc_array(UIO_MAXIOV,
 			sizeof(struct vring_desc), GFP_KERNEL);
-	if (!vq->indirect)
-		return ERROR_NO_MEM;
+
+	vq->heads = kmalloc_array(UIO_MAXIOV, sizeof(*vq->heads),
+			  GFP_KERNEL);
+	if (!vq->indirect || !vq->heads)
+		goto err_free_mem;
+
 	return VQUEUE_SUCCESS;
+
+err_free_mem:
+	kfree(vq->indirect);
+	vq->indirect = NULL;
+	kfree(vq->heads);
+	vq->heads = NULL;
+
+	return ERROR_NO_MEM;
 }
 
 int virtqueue_create(struct virtio_device *virt_dev, unsigned short id,
@@ -75,13 +87,12 @@ int virtqueue_create(struct virtio_device *virt_dev, unsigned short id,
 		vq->notify = notify;
 		mutex_init(&vq->mutex);
 
-		status = virtqueue_alloc_indirect(vq);
+		status = virtqueue_alloc_buffers(vq);
 		if (status != VQUEUE_SUCCESS)
 			return status;
 
 		/* Initialize vring control block in virtqueue. */
 		vq_ring_init(vq, ring->vaddr, ring->align);
-		vq->heads = vq->vq_ring.used->ring;
 	}
 
 	/*

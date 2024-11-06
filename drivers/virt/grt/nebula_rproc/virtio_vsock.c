@@ -20,6 +20,11 @@
 #include "virtio.h"
 #include "virtio_vsock.h"
 
+int x_vsock_core_register(const struct vsock_transport *t, int features);
+void x_vsock_core_unregister(const struct vsock_transport *t);
+
+#define VIRTIO_ID_VSOCKX 0x81
+
 #define VHOST_VSOCK_DEFAULT_HOST_CID 2
 
 /* Resource table entries */
@@ -51,7 +56,7 @@ struct vsock_device_descriptor {
 static const struct vsock_device_descriptor vsock_vdev_desc = {
 	.vdev		= {
 		.type		= RSC_VDEV,
-		.id		= VIRTIO_ID_VSOCK,
+		.id		= VIRTIO_ID_VSOCKX,
 		.dfeatures	= 0,
 		.config_len	= sizeof(struct virtio_vsock_config),
 		.num_of_vrings	= VSOCK_VQ_MAX,
@@ -752,15 +757,15 @@ static struct nebula_rproc_vdev_ops vsock_vdev_ops = {
 
 static int __init nebula_virtio_vsocket_init(void)
 {
-	int ret = vsock_core_register(&vhost_transport.transport,
-				      VSOCK_TRANSPORT_F_H2G);
+	int ret = x_vsock_core_register(&vhost_transport.transport,
+					VSOCK_TRANSPORT_F_H2G);
 	if (ret < 0)
 		return ret;
 
 	ret = nebula_rproc_register_device(
 		&vsock_vdev_desc, sizeof(vsock_vdev_desc), &vsock_vdev_ops);
 	if (ret) {
-		vsock_core_unregister(&vhost_transport.transport);
+		x_vsock_core_unregister(&vhost_transport.transport);
 		return ret;
 	}
 	return 0;

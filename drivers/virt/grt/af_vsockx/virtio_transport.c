@@ -9,6 +9,8 @@
  * Some of the code is take from Gerd Hoffmann <kraxel@redhat.com>'s
  * early virtio-vsock proof-of-concept bits.
  */
+#include "rename_symbols.h"
+
 #include <linux/spinlock.h>
 #include <linux/module.h>
 #include <linux/list.h>

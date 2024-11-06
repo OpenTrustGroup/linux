@@ -1,0 +1,27 @@
+#define vsock_connected_table x_vsock_connected_table
+#define vsock_table_lock x_vsock_table_lock
+#define vsock_insert_connected x_vsock_insert_connected
+#define vsock_remove_bound x_vsock_remove_bound
+#define vsock_remove_connected x_vsock_remove_connected
+#define vsock_find_bound_socket x_vsock_find_bound_socket
+#define vsock_find_connected_socket x_vsock_find_connected_socket
+#define vsock_remove_sock x_vsock_remove_sock
+#define vsock_for_each_connected_socket x_vsock_for_each_connected_socket
+#define vsock_add_pending x_vsock_add_pending
+#define vsock_remove_pending x_vsock_remove_pending
+#define vsock_enqueue_accept x_vsock_enqueue_accept
+#define vsock_assign_transport x_vsock_assign_transport
+#define vsock_find_cid x_vsock_find_cid
+#define vsock_create_connected x_vsock_create_connected
+#define vsock_stream_has_data x_vsock_stream_has_data
+#define vsock_connectible_has_data x_vsock_connectible_has_data
+#define vsock_stream_has_space x_vsock_stream_has_space
+#define vsock_data_ready x_vsock_data_ready
+#define vsock_dgram_recvmsg x_vsock_dgram_recvmsg
+#define vsock_connectible_recvmsg x_vsock_connectible_recvmsg
+#define vsock_core_get_transport x_vsock_core_get_transport
+#define vsock_core_register x_vsock_core_register
+#define vsock_core_unregister x_vsock_core_unregister
+#define vsock_bind_table x_vsock_bind_table
+#define vsock_proto x_vsock_proto
+

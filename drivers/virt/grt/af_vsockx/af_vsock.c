@@ -85,6 +85,8 @@
  *   TCP_LISTEN - listening
  */
 
+#include "rename_symbols.h"
+
 #include <linux/compat.h>
 #include <linux/types.h>
 #include <linux/bitops.h>
@@ -113,13 +115,15 @@
 #include <net/af_vsock.h>
 #include <uapi/linux/vm_sockets.h>
 
+#define AF_VSOCKX AF_DECnet
+
 static int __vsock_bind(struct sock *sk, struct sockaddr_vm *addr);
 static void vsock_sk_destruct(struct sock *sk);
 static int vsock_queue_rcv_skb(struct sock *sk, struct sk_buff *skb);
 
 /* Protocol family. */
 struct proto vsock_proto = {
-	.name = "AF_VSOCK",
+	.name = "AF_VSOCKX",
 	.owner = THIS_MODULE,
 	.obj_size = sizeof(struct vsock_sock),
 #ifdef CONFIG_BPF_SYSCALL
@@ -735,7 +739,7 @@ static struct sock *__vsock_create(struct net *net,
 	struct vsock_sock *psk;
 	struct vsock_sock *vsk;
 
-	sk = sk_alloc(net, AF_VSOCK, priority, &vsock_proto, kern);
+	sk = sk_alloc(net, AF_VSOCKX, priority, &vsock_proto, kern);
 	if (!sk)
 		return NULL;
 
@@ -1637,7 +1641,7 @@ static int vsock_connectible_setsockopt(struct socket *sock,
 	const struct vsock_transport *transport;
 	u64 val;
 
-	if (level != AF_VSOCK)
+	if (level != AF_VSOCKX)
 		return -ENOPROTOOPT;
 
 #define COPY_IN(_v)                                       \
@@ -1730,7 +1734,7 @@ static int vsock_connectible_getsockopt(struct socket *sock,
 	int lv = sizeof(v.val64);
 	int len;
 
-	if (level != AF_VSOCK)
+	if (level != AF_VSOCKX)
 		return -ENOPROTOOPT;
 
 	if (get_user(len, optlen))
@@ -2318,7 +2322,7 @@ static int vsock_create(struct net *net, struct socket *sock,
 }
 
 static const struct net_proto_family vsock_family_ops = {
-	.family = AF_VSOCK,
+	.family = AF_VSOCKX,
 	.create = vsock_create,
 	.owner = THIS_MODULE,
 };
@@ -2375,7 +2379,7 @@ static const struct file_operations vsock_device_ops = {
 };
 
 static struct miscdevice vsock_device = {
-	.name		= "vsock",
+	.name		= "vsockx",
 	.fops		= &vsock_device_ops,
 };
 
@@ -2402,7 +2406,7 @@ static int __init vsock_init(void)
 	err = sock_register(&vsock_family_ops);
 	if (err) {
 		pr_err("could not register af_vsock (%d) address family: %d\n",
-		       AF_VSOCK, err);
+		       AF_VSOCKX, err);
 		goto err_unregister_proto;
 	}
 
@@ -2421,7 +2425,7 @@ err_reset_transport:
 static void __exit vsock_exit(void)
 {
 	misc_deregister(&vsock_device);
-	sock_unregister(AF_VSOCK);
+	sock_unregister(AF_VSOCKX);
 	proto_unregister(&vsock_proto);
 }
 

@@ -120,6 +120,6 @@ int rproc_virtio_notified(struct virtio_device *vdev, uint32_t notifyid);
  *
  * @return true when remote processor is ready.
  */
-void rproc_virtio_wait_remote_ready(struct virtio_device *vdev);
+bool rproc_virtio_wait_remote_ready(struct virtio_device *vdev);
 
 #endif /* REMOTEPROC_VIRTIO_H */

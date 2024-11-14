@@ -12,6 +12,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/mod_devicetable.h>
+#include <linux/delay.h>
 
 #include "remoteproc.h"
 #include "remoteproc_virtio.h"
@@ -273,14 +274,14 @@ int rproc_virtio_notified(struct virtio_device *vdev, uint32_t notifyid)
 	return 0;
 }
 
-void rproc_virtio_wait_remote_ready(struct virtio_device *vdev)
+bool rproc_virtio_wait_remote_ready(struct virtio_device *vdev)
 {
 	uint8_t status;
 
 	while (1) {
 		status = rproc_virtio_get_status(vdev);
 		if (status & VIRTIO_CONFIG_STATUS_DRIVER_OK)
-			return;
-		schedule();
+			return true;
+		msleep(100);
 	}
 }

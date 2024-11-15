@@ -260,7 +260,6 @@ static int rproc_host_probe(struct platform_device *pdev)
 	}
 	dev_info(dev, "shared memory mapped @ %px, size %lx\n", shm_base,
 		 shm_size);
-	dump_rsc_table(dev, shm_base);
 
 	priv->magic = NBL_RPROC_MAGIC;
 	priv->reg_base = reg_base;

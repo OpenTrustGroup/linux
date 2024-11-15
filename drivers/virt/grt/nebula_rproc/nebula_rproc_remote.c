@@ -19,6 +19,7 @@
 #include <linux/mutex.h>
 #include <linux/delay.h>
 #include <linux/completion.h>
+#include <linux/spinlock.h>
 
 #include <linux/arm-smccc.h>
 #include <linux/nebula/hvcall.h>
@@ -38,6 +39,24 @@ enum {
 enum {
 	STATE_NOT_READY,
 	STATE_READY,
+};
+
+enum {
+	IDLE,
+	CREATING_VDEV,
+	VDEV_CREATED,
+	WAITING_HOST,
+	HOST_READY,
+	DESTROYING_VDEV,
+};
+
+char *state_string[] = {
+	__stringify(IDLE),
+	__stringify(CREATING_VDEV),
+	__stringify(VDEV_CREATED),
+	__stringify(WAITING_HOST),
+	__stringify(HOST_READY),
+	__stringify(DESTROYING_VDEV),
 };
 
 #define MAX_VIRTIO_DEVICES 20
@@ -73,7 +92,6 @@ struct rproc_remote_priv {
 	size_t shm_size;
 	phys_addr_t host_shm_phys;
 	struct metal_io_region shm_io;
-	atomic_t vdev_ready;
 
 	struct device *dev;
 	int num_queues;
@@ -90,8 +108,58 @@ struct rproc_remote_priv {
 	struct completion compl;
 	bool need_release;
 
+	int state;
+	spinlock_t state_lock;
+	struct dentry *dbgfs;
+	bool auto_restart;
+
 	struct list_head node;
 };
+
+static void set_state(struct rproc_remote_priv *priv, int state)
+{
+	unsigned long flags;
+	int prev_state;
+
+	spin_lock_irqsave(&priv->state_lock, flags);
+	prev_state = priv->state;
+	priv->state = state;
+	if (state == IDLE && priv->auto_restart)
+		complete(&priv->compl);
+	spin_unlock_irqrestore(&priv->state_lock, flags);
+
+	dev_info(priv->dev, "%s -> %s\n",
+		 state_string[prev_state], state_string[state]);
+}
+
+static int get_state(struct rproc_remote_priv *priv)
+{
+	unsigned long flags;
+	int state;
+
+	spin_lock_irqsave(&priv->state_lock, flags);
+	state = priv->state;
+	spin_unlock_irqrestore(&priv->state_lock, flags);
+
+	return state;
+}
+
+#define WAIT_STATE_TIMEOUT_MSEC 60000
+
+static bool wait_for_state(struct rproc_remote_priv *priv, int expected)
+{
+	unsigned long timeout =
+		jiffies + msecs_to_jiffies(WAIT_STATE_TIMEOUT_MSEC);
+
+	do {
+		if (get_state(priv) == expected)
+			return false;
+
+		mdelay(1);
+	} while (time_before(jiffies, timeout));
+
+	return true;
+}
 
 LIST_HEAD(rproc_devices);
 DEFINE_MUTEX(rproc_devices_lock);
@@ -441,11 +509,6 @@ static void rproc_vdev_destroy(struct rproc_remote_priv *priv)
 	int i, j;
 
 	dev_dbg(priv->dev, "rproc vdev destroy start\n");
-	if (!atomic_read(&priv->vdev_ready))
-		return;
-
-	// host is gone. remove all virtio devices
-	atomic_set(&priv->vdev_ready, false);
 
 	for (i = 0; i < priv->num_vdevs; i++) {
 		struct virtio_device_info *vdev = &priv->vdevs[i];
@@ -481,21 +544,27 @@ static void rproc_vdev_destroy(struct rproc_remote_priv *priv)
 static irqreturn_t rproc_ctrl_irq_handler(int irq, void *data)
 {
 	struct rproc_remote_priv *priv = (struct rproc_remote_priv *)data;
-	u32 state = readl_relaxed(priv->reg_base + RPROC_REG_STATE);
+	u32 host_state = readl_relaxed(priv->reg_base + RPROC_REG_STATE);
 
 	smp_mb();
-	dev_dbg(priv->dev, "rproc remote notify us with %d\n", state);
-	if (state == STATE_READY) {
+	if (host_state == STATE_READY) {
+		dev_info(priv->dev, "rproc host is online\n");
 		priv->host_shm_phys =
 			readl_relaxed(priv->reg_base + RPROC_REG_SHM_BASE_LOW);
 		priv->host_shm_phys |=
 			(u64)readl_relaxed(priv->reg_base + RPROC_REG_SHM_BASE_HIGH)
 			<< 32;
 
-		smp_mb();
-		complete(&priv->compl);
+		set_state(priv, HOST_READY);
 	} else {
-		priv->need_release = true;
+		dev_info(priv->dev, "rproc host is offline\n");
+		if (get_state(priv) == VDEV_CREATED) {
+			set_state(priv, DESTROYING_VDEV);
+			rproc_vdev_destroy(priv);
+			set_state(priv, IDLE);
+		} else {
+			priv->need_release = true;
+		}
 	}
 
 	return IRQ_HANDLED;
@@ -504,21 +573,145 @@ static irqreturn_t rproc_ctrl_irq_handler(int irq, void *data)
 static int create_vdev(void *args)
 {
 	struct rproc_remote_priv *priv = (struct rproc_remote_priv *)args;
-	int ret;
+	bool timeout;
+	int state, ret;
 
 	while (!kthread_should_stop()) {
 		dev_dbg(priv->dev, "rproc wait for create vdev event ...\n");
 		wait_for_completion_interruptible(&priv->compl);
 
-		if (atomic_read(&priv->vdev_ready))
-			rproc_vdev_destroy(priv);
+		state = get_state(priv);
+		if (state == DESTROYING_VDEV) {
+			timeout = wait_for_state(priv, IDLE);
+			if (timeout) {
+				dev_err(priv->dev,
+					"waiting for IDLE timeout "
+					"(hang in destroying vdev?)\n");
+				set_state(priv, IDLE);
+				continue;
+			}
+		}
+
+		set_state(priv, WAITING_HOST);
 		writel_relaxed(0, priv->reg_base + RPROC_REG_SET_READY);
-		smp_mb();
+
+		timeout = wait_for_state(priv, HOST_READY);
+		if (timeout) {
+			dev_err(priv->dev,
+				"waiting for HOST_READY timeout "
+				"(nebula_rproc_host driver is not loaded?)\n");
+			set_state(priv, IDLE);
+			writel_relaxed(0, priv->reg_base + RPROC_REG_CLEAR_READY);
+			continue;
+		}
+
+		set_state(priv, CREATING_VDEV);
 		ret = create_rproc_vdev(priv);
-		if (ret == 0)
-			atomic_set(&priv->vdev_ready, true);
+		if (ret == 0) {
+			set_state(priv, VDEV_CREATED);
+		} else {
+			set_state(priv, IDLE);
+		}
 	}
 	return 0;
+}
+
+static int online_get(void *data, u64 *val)
+{
+	return -EPERM;
+}
+
+static int rproc_remote_online(struct rproc_remote_priv *priv)
+{
+	int state = get_state(priv);
+
+	if (state == IDLE || state == DESTROYING_VDEV) {
+		complete(&priv->compl);
+		return 0;
+	} else {
+		dev_err(priv->dev, "bad state: %s\n", state_string[state]);
+		return -EBUSY;
+	}
+}
+
+static int rproc_remote_offline(struct rproc_remote_priv *priv)
+{
+	int state = get_state(priv);
+
+	if (state == VDEV_CREATED) {
+		writel_relaxed(0, priv->reg_base + RPROC_REG_CLEAR_READY);
+		set_state(priv, DESTROYING_VDEV);
+		rproc_vdev_destroy(priv);
+		set_state(priv, IDLE);
+		return 0;
+	} else {
+		dev_err(priv->dev, "bad state: %s\n", state_string[state]);
+		return -EBUSY;
+	}
+}
+
+static int online_set(void *data, u64 val)
+{
+	struct rproc_remote_priv *priv = data;
+
+	if (val == 1) {
+		return rproc_remote_online(priv);
+	} else if (val == 0) {
+		return rproc_remote_offline(priv);
+	} else {
+		dev_err(priv->dev, "only 0 or 1 is valid\n");
+	}
+
+	return 0;
+}
+DEFINE_SIMPLE_ATTRIBUTE(online_ops, online_get, online_set, "%llu\n");
+
+static int auto_restart_get(void *data, u64 *val)
+{
+	struct rproc_remote_priv *priv = data;
+	*val = priv->auto_restart;
+	return 0;
+}
+
+static int auto_restart_set(void *data, u64 val)
+{
+	struct rproc_remote_priv *priv = data;
+	priv->auto_restart = val;
+	return 0;
+}
+DEFINE_SIMPLE_ATTRIBUTE(auto_restart_ops, auto_restart_get, auto_restart_set,
+			"%llu\n");
+
+static int rproc_state_show(struct seq_file *s, void *data)
+{
+	struct rproc_remote_priv *priv = s->private;
+	seq_printf(s, "%s\n", state_string[get_state(priv)]);
+	return 0;
+}
+
+static int rproc_state_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, rproc_state_show, inode->i_private);
+}
+
+static const struct file_operations rproc_state_ops = {
+	.open = rproc_state_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static struct dentry *dbgfs_root(void)
+{
+	static DEFINE_MUTEX(lck);
+	static struct dentry *dbgfs_root = NULL;
+
+	mutex_lock(&lck);
+	if (dbgfs_root == NULL)
+		dbgfs_root = debugfs_create_dir("nebula_rproc", NULL);
+	mutex_unlock(&lck);
+
+	return dbgfs_root;
 }
 
 static int rproc_remote_probe(struct platform_device *pdev)
@@ -571,7 +764,6 @@ static int rproc_remote_probe(struct platform_device *pdev)
 	priv->dev = &pdev->dev;
 	priv->shm_io.paddr_to_vaddr = rproc_paddr_to_vaddr;
 	priv->shm_io.vaddr_to_paddr = rproc_vaddr_to_paddr;
-	atomic_set(&priv->vdev_ready, false);
 	mutex_init(&priv->rsc_table_mutex);
 
 	platform_set_drvdata(pdev, priv);
@@ -627,6 +819,17 @@ static int rproc_remote_probe(struct platform_device *pdev)
 	priv->rsc_table_offset = sizeof(struct rproc_resource_table);
 	INIT_LIST_HEAD(&priv->node);
 
+	priv->state = IDLE;
+	spin_lock_init(&priv->state_lock);
+
+	priv->dbgfs = debugfs_create_dir(pdev->name, dbgfs_root());
+	debugfs_create_file("state", 0400, priv->dbgfs, priv,
+			    &rproc_state_ops);
+	debugfs_create_file("auto_restart", 0644, priv->dbgfs, priv,
+			    &auto_restart_ops);
+	debugfs_create_file("online", 0644, priv->dbgfs, priv,
+			    &online_ops);
+
 	priv->thread = kthread_run(create_vdev, priv, "rproc_vdev_create");
 	if (IS_ERR(priv->thread)) {
 		dev_err(priv->dev, "ERROR: failed to start rproc_vdev_create\n");
@@ -647,11 +850,6 @@ err_free_priv:
 	return ret;
 }
 
-static int rproc_remote_remove(struct platform_device *pdev)
-{
-	return 0;
-}
-
 static const struct of_device_id rproc_remote_of_match[] = {
 	{
 		.compatible = "grt,rproc-remote",
@@ -661,7 +859,6 @@ static const struct of_device_id rproc_remote_of_match[] = {
 
 static struct platform_driver nebula_rproc_remote = {
 	.probe = rproc_remote_probe,
-	.remove = rproc_remote_remove,
 	.driver	= {
 		.name = "nebula-rproc-remote",
 		.owner = THIS_MODULE,

@@ -1693,6 +1693,25 @@ static struct miscdevice vhost_net_misc = {
 	.fops = &vhost_net_fops,
 };
 
+#define WAIT_STATE_TIMEOUT_MSEC 60000
+
+static bool wait_for_backend_socks(void)
+{
+	unsigned long timeout =
+	    jiffies + msecs_to_jiffies(WAIT_STATE_TIMEOUT_MSEC);
+
+	do
+	{
+		if (s_backend_socks[VHOST_NET_VQ_RX] != NULL &&
+		    s_backend_socks[VHOST_NET_VQ_TX] != NULL)
+			return false;
+
+		mdelay(1);
+	} while (time_before(jiffies, timeout));
+
+	return true;
+}
+
 static int vhost_net_device_create(struct virtio_device *vdev,
 			    	   struct metal_io_region *shm_io) {
 	struct vhost_net *n;
@@ -1701,10 +1720,13 @@ static int vhost_net_device_create(struct virtio_device *vdev,
 	int i, ret, vq_err;
 	const char *vq_names[VHOST_NET_VQ_MAX];
 	vq_callback callback[VHOST_NET_VQ_MAX];
+	bool timeout;
 
-	if (s_backend_socks[VHOST_NET_VQ_RX] == NULL ||
-	    s_backend_socks[VHOST_NET_VQ_TX] == NULL)
+	timeout = wait_for_backend_socks();
+	if (timeout) {
+		pr_err("timeout waiting for backend socks\n");
 		return -EINVAL;
+	}
 
 	n = kvmalloc(sizeof *n, GFP_KERNEL | __GFP_RETRY_MAYFAIL);
 	if (!n)

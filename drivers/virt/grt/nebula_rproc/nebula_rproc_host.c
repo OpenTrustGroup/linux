@@ -69,7 +69,36 @@ struct rproc_host_priv {
 	int num_queues;
 	struct irq_info *irq_info;
 	bool notify_with_phys_irq;
+#if defined(CONFIG_ZONE_DEVICE)
+	struct dev_pagemap pgmap;
+#endif
+
+	struct device *dev;
+	struct list_head node;
+	bool attached;
 };
+
+static LIST_HEAD(rproc_devices);
+static DEFINE_MUTEX(rproc_devices_lock);
+
+struct device *nebula_rproc_get_alloc_device(struct virtio_device *vdev) {
+	struct rproc_host_priv *priv;
+	struct device *alloc_dev = NULL;
+
+	mutex_lock(&rproc_devices_lock);
+
+	list_for_each_entry(priv, &rproc_devices, node) {
+		if (priv->dev == vdev->dev.parent->parent->parent) {
+			alloc_dev = vdev->dev.parent;
+			break;
+		}
+	}
+
+	mutex_unlock(&rproc_devices_lock);
+
+	return alloc_dev;
+}
+EXPORT_SYMBOL(nebula_rproc_get_alloc_device);
 
 static irqreturn_t rproc_notify_irq_handler(int irq, void *data)
 {
@@ -82,17 +111,90 @@ static irqreturn_t rproc_notify_irq_handler(int irq, void *data)
 
 static irqreturn_t rproc_ctrl_irq_handler(int irq, void *data)
 {
-	// nothing to do currently
+	struct rproc_host_priv *priv = (struct rproc_host_priv *)data;
+
+	queue_work(priv->workq, &priv->attach_work);
 	return IRQ_HANDLED;
 }
 
 static int nebula_rproc_attach(struct rproc *rproc)
 {
+	struct rproc_vdev *rvdev;
+	struct rproc_host_priv *priv = rproc->priv;
+	void *rsc_table = priv->shm_base;
+	struct platform_device *pdev =
+		container_of(priv->dev, struct platform_device, dev);
+	cpumask_t mask;
+
+	// bind rproc irq to vcpu5
+	cpumask_clear(&mask);
+	cpumask_set_cpu(5, &mask);
+
+	list_for_each_entry(rvdev, &rproc->rvdevs, node) {
+		struct fw_rsc_vdev *rsc_vdev = rsc_table + rvdev->rsc_offset;
+		int i, ret;
+		bool use_threaded_irq = rsc_vdev->id == VIRTIO_ID_RPMSG;
+
+		for (i = 0; i < rsc_vdev->num_of_vrings; i++) {
+			int notifyid = rvdev->vring[i].notifyid;
+			struct irq_info *irq_info = &priv->irq_info[notifyid];
+			int virq = platform_get_irq(pdev, notifyid + 1);
+			BUG_ON(virq < 0);
+
+			irq_info->local_virq = virq;
+			irq_info->notifyid = notifyid;
+			irq_info->rproc = rproc;
+			if (priv->notify_with_phys_irq) {
+				int hwirq;
+				ret = of_property_read_u32_index(
+					priv->dev->of_node, "remote_irqs",
+					notifyid, &hwirq);
+				BUG_ON(ret < 0);
+				irq_info->remote_hwirq = hwirq;
+			}
+
+			if (use_threaded_irq)
+				ret = devm_request_threaded_irq(
+					&pdev->dev, virq, NULL,
+					rproc_notify_irq_handler, IRQF_ONESHOT,
+					dev_name(&pdev->dev), irq_info);
+			else
+				ret = devm_request_irq(&pdev->dev, virq,
+						       rproc_notify_irq_handler,
+						       IRQF_SHARED,
+						       dev_name(&pdev->dev),
+						       irq_info);
+			BUG_ON(ret < 0);
+			irq_set_affinity_hint(virq, &mask);
+		}
+	}
+
 	return 0;
 }
 
 static int nebula_rproc_detach(struct rproc *rproc)
 {
+	struct rproc_vdev *rvdev;
+	struct rproc_host_priv *priv = rproc->priv;
+	void *rsc_table = priv->shm_base;
+	struct platform_device *pdev =
+		container_of(priv->dev, struct platform_device, dev);
+
+	list_for_each_entry(rvdev, &rproc->rvdevs, node) {
+		struct fw_rsc_vdev *rsc_vdev = rsc_table + rvdev->rsc_offset;
+		int i;
+
+		for (i = 0; i < rsc_vdev->num_of_vrings; i++) {
+			int notifyid = rvdev->vring[i].notifyid;
+			struct irq_info *irq_info = &priv->irq_info[notifyid];
+			int virq = platform_get_irq(pdev, notifyid + 1);
+			BUG_ON(virq < 0);
+
+			irq_set_affinity_hint(virq, NULL);
+			devm_free_irq(&pdev->dev, virq, irq_info);
+		}
+	}
+
 	return 0;
 }
 
@@ -128,14 +230,37 @@ static void rproc_host_attach_work(struct work_struct *work)
 {
 	struct rproc_host_priv *priv =
 		container_of(work, struct rproc_host_priv, attach_work);
-	rproc_boot(priv->rproc);
+	int ret;
+	u32 state = readl_relaxed(priv->reg_base + RPROC_REG_STATE);
+	if (state == STATE_READY) {
+		if (priv->attached) {
+			dev_warn(
+				&priv->rproc->dev,
+				"got READY interrupt while already attached?\n");
+			return;
+		}
+
+		writel_relaxed(0, priv->reg_base + RPROC_REG_SET_READY);
+		ret = rproc_boot(priv->rproc);
+		if (ret != 0) {
+			dev_err(&priv->rproc->dev,
+				"failed to attach nebula_rproc: ret=%d", ret);
+		} else {
+			priv->attached = true;
+		}
+	} else {
+		if (priv->attached) {
+			rproc_detach(priv->rproc);
+			priv->attached = false;
+		}
+	}
 }
 
 static struct rproc_host_priv *to_priv(struct device *dev)
 {
 	struct rproc_host_priv *priv = dev_get_drvdata(dev);
 
-	// request may comes from out grandchild
+	// request may comes from our grandchild
 	if (priv->magic != NBL_RPROC_MAGIC) {
 		dev = dev->parent->parent;
 		priv = dev_get_drvdata(dev);
@@ -145,20 +270,43 @@ static struct rproc_host_priv *to_priv(struct device *dev)
 	return priv;
 }
 
+#if defined(CONFIG_ZONE_DEVICE)
+static void prep_compound_page(struct page *page, unsigned int order)
+{
+	int i;
+	int nr_pages = 1 << order;
+
+	set_compound_order(page, order);
+	__SetPageHead(page);
+	for (i = 1; i < nr_pages; i++) {
+		struct page *p = page + i;
+		set_page_count(p, 0);
+		set_compound_head(p, page);
+	}
+}
+#endif
+
 static void *rproc_alloc_coherent(struct device *dev, size_t size,
 				  dma_addr_t *dma_addr, gfp_t flag,
 				  unsigned long attrs)
 {
 	void *ptr;
 	struct rproc_host_priv *priv = to_priv(dev);
+#if defined(CONFIG_ZONE_DEVICE)
+	int order = get_order(size);
 
-	dev_dbg(dev, "rproc_alloc_coherent: size=%lx, attrs=%lx\n", size,
-		attrs);
-
+	size = 1 << (PAGE_SHIFT + order);
+#endif
 	ptr = gen_pool_dma_alloc(priv->dma_buf_pool, size, dma_addr);
-	dev_dbg(dev, "rproc_alloc_coherent: addr=%px, dma_addr=%llx\n", ptr,
-		*dma_addr);
+	dev_dbg(dev,
+		"rproc_alloc_coherent: addr=%px, size=%lx, dma_addr=%llx, attrs=%lx\n",
+		ptr, size, *dma_addr, attrs);
 
+#if defined(CONFIG_ZONE_DEVICE)
+	if (order)
+		prep_compound_page(virt_to_page(ptr), order);
+	set_page_count(virt_to_page(ptr), 1);
+#endif
 	return ptr;
 }
 
@@ -167,7 +315,7 @@ static void rproc_free_coherent(struct device *dev, size_t size, void *vaddr,
 {
 	struct rproc_host_priv *priv = to_priv(dev);
 
-	dev_dbg(dev, "rproc_alloc_coherent: addr=%llx size=%lx, attrs=%lx\n",
+	dev_dbg(dev, "rproc_free_coherent: addr=%llx size=%lx, attrs=%lx\n",
 		dma_addr, size, attrs);
 	gen_pool_free(priv->dma_buf_pool, (unsigned long)vaddr, size);
 }
@@ -193,25 +341,21 @@ struct rproc_vdev_desc
 	struct fw_rsc_vdev vdev;
 } __packed;
 
-static void dump_rsc_table(struct device *dev, void *table)
-{
-	struct rproc_resource_table *rsc_table = table;
-	int i;
-	dev_dbg(dev, "dump_rsc_table\n");
-	dev_dbg(dev, "ver=%d\n", rsc_table->ver);
-	dev_dbg(dev, "num=%d\n", rsc_table->num);
+#if defined(CONFIG_ZONE_DEVICE)
+static void rproc_shm_page_free(struct page *page) {
+	struct device* dev = page->pgmap->owner;
+	size_t size = (1UL << (PAGE_SHIFT + compound_order(page)));
+	dma_addr_t dma_handle = page_to_phys(page);
 
-	for (i = 0; i < rsc_table->num; i++)
-	{
-		struct rproc_vdev_desc *vdev_desc;
-		u32 offset = rsc_table->offset[i];
-
-		vdev_desc = table + offset;
-		dev_dbg(dev, "vdev%d, offset=%x\n", i, rsc_table->offset[i]);
-		dev_dbg(dev, "vdev%d, type=%x", i, vdev_desc->hdr.type);
-		dev_dbg(dev, "vdev%d, num_vrings=%d", i, vdev_desc->vdev.num_of_vrings);
-	}
+	dev_dbg(dev, "page free: dma_addr: %llx, size: %lx\n",
+		page_to_phys(page), size);
+	dma_free_coherent(dev, size, page_to_virt(page), dma_handle);
 }
+
+struct dev_pagemap_ops pagemap_ops = {
+	.page_free = rproc_shm_page_free,
+};
+#endif
 
 static int rproc_host_probe(struct platform_device *pdev)
 {
@@ -224,8 +368,10 @@ static int rproc_host_probe(struct platform_device *pdev)
 	void *shm_base, *gen_pool_base;
 	size_t shm_size, gen_pool_size;
 	uint64_t shm_phys, gen_pool_phys;
-	int irq_count, remote_irq_count, i;
-	cpumask_t mask;
+	int irq_count, remote_irq_count;
+#if defined(CONFIG_ZONE_DEVICE)
+	struct dev_pagemap *pgmap;
+#endif
 
 	rproc = devm_rproc_alloc(dev, "nbl_rproc_remote", &nebula_rproc_ops,
 				 NULL, sizeof(*priv));
@@ -253,7 +399,28 @@ static int rproc_host_probe(struct platform_device *pdev)
 
 	shm_phys = mem->start;
 	shm_size = resource_size(mem);
+
+#if defined(CONFIG_ZONE_DEVICE)
+	/*
+	 * It's important not using MEMORY_DEVICE_GENERIC here. For device
+	 * type other than MEMORY_DEVICE_PRIVATE and MEMORY_DEVICE_COHERENT,
+	 * the page refcount will be reset to 1 after it has been freed (See
+	 * free_zone_device_page). We have a race here since memory allocation
+	 * can happen in parallel. Before page refcount reset to 1, the freed
+	 * page may have been allocated again and referenced by other user(s).
+	 * This will cause doulbe-free issue.
+	 */
+	pgmap = &priv->pgmap;
+	pgmap->type = MEMORY_DEVICE_COHERENT;
+	pgmap->range.start = shm_phys;
+	pgmap->range.end = shm_phys + shm_size - 1;
+	pgmap->nr_range = 1;
+	pgmap->ops = &pagemap_ops;
+	pgmap->owner = dev;
+	shm_base = devm_memremap_pages(dev, pgmap);
+#else
 	shm_base = devm_memremap(dev, shm_phys, shm_size, MEMREMAP_WB);
+#endif
 	if (!shm_base) {
 		ret = -EINVAL;
 		goto err_unmap_reg;
@@ -275,7 +442,11 @@ static int rproc_host_probe(struct platform_device *pdev)
 		goto err_unmap_reg;
 	}
 
+#if defined(CONFIG_ZONE_DEVICE)
+	priv->dma_buf_pool = gen_pool_create(PAGE_SHIFT, -1);
+#else
 	priv->dma_buf_pool = gen_pool_create(0, -1);
+#endif
 	if (priv->dma_buf_pool == NULL) {
 		dev_err(dev, "failed to create gen pool\n");
 		ret = -ENOMEM;
@@ -314,52 +485,25 @@ static int rproc_host_probe(struct platform_device *pdev)
 		BUG_ON(remote_irq_count != irq_count - 1);
 	}
 
-	// bind rproc irq to vcpu5
-	cpumask_clear(&mask);
-	cpumask_set_cpu(5, &mask);
-
 	virq = platform_get_irq(pdev, 0);
-	ret = devm_request_threaded_irq(&pdev->dev, virq, NULL,
-					rproc_ctrl_irq_handler, IRQF_ONESHOT,
-					dev_name(&pdev->dev), priv);
+	ret = devm_request_irq(&pdev->dev, virq, rproc_ctrl_irq_handler,
+			       IRQF_SHARED, dev_name(&pdev->dev), priv);
 	BUG_ON(ret < 0);
-	irq_set_affinity_hint(virq, &mask);
 
+	INIT_LIST_HEAD(&priv->node);
+	priv->dev = dev;
 	priv->num_queues = irq_count - 1;
 	priv->irq_info =
 		kzalloc(irq_count * sizeof(struct irq_info), GFP_KERNEL);
 	if (!priv->irq_info)
 		goto err_remove_rproc;
 
-	for (i = 0; i < priv->num_queues; i++) {
-		struct irq_info *irq_info = &priv->irq_info[i];
-
-		virq = platform_get_irq(pdev, i + 1);
-		BUG_ON(virq < 0);
-
-		irq_info->local_virq = virq;
-		irq_info->notifyid = i;
-		irq_info->rproc = rproc;
-		if (priv->notify_with_phys_irq) {
-			int hwirq;
-			ret = of_property_read_u32_index(
-				dev->of_node, "remote_irqs", i, &hwirq);
-			BUG_ON(ret < 0);
-			irq_info->remote_hwirq = hwirq;
-		}
-
-		ret = devm_request_threaded_irq(&pdev->dev, virq, NULL,
-						rproc_notify_irq_handler,
-						IRQF_ONESHOT,
-						dev_name(&pdev->dev), irq_info);
-		BUG_ON(ret < 0);
-		irq_set_affinity_hint(virq, &mask);
-	}
-
 	platform_set_drvdata(pdev, priv);
-	writel_relaxed(0, priv->reg_base + RPROC_REG_SET_READY);
 
-	// TODO: should check remote is alive before attach
+	mutex_lock(&rproc_devices_lock);
+	list_add(&priv->node, &rproc_devices);
+	mutex_unlock(&rproc_devices_lock);
+
 	queue_work(priv->workq, &priv->attach_work);
 	return 0;
 

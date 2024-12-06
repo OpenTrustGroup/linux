@@ -161,8 +161,8 @@ static bool wait_for_state(struct rproc_remote_priv *priv, int expected)
 	return true;
 }
 
-LIST_HEAD(rproc_devices);
-DEFINE_MUTEX(rproc_devices_lock);
+static LIST_HEAD(rproc_devices);
+static DEFINE_MUTEX(rproc_devices_lock);
 
 int nebula_rproc_register_device(const void *rsc, size_t rsc_size,
 				 struct nebula_rproc_vdev_ops *vdev_ops)

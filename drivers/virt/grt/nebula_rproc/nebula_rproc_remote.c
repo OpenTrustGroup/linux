@@ -616,11 +616,6 @@ static int create_vdev(void *args)
 	return 0;
 }
 
-static int online_get(void *data, u64 *val)
-{
-	return -EPERM;
-}
-
 static int rproc_remote_online(struct rproc_remote_priv *priv)
 {
 	int state = get_state(priv);
@@ -650,69 +645,67 @@ static int rproc_remote_offline(struct rproc_remote_priv *priv)
 	}
 }
 
-static int online_set(void *data, u64 val)
+static ssize_t online_store(struct device *dev,
+			    struct device_attribute *attr,
+			    const char *buf, size_t size)
 {
-	struct rproc_remote_priv *priv = data;
+	struct rproc_remote_priv *priv = dev_get_drvdata(dev);
+	bool online;
+	int ret;
 
-	if (val == 1) {
-		return rproc_remote_online(priv);
-	} else if (val == 0) {
-		return rproc_remote_offline(priv);
+	ret = strtobool(buf, &online);
+	if (ret < 0)
+		return ret;
+
+	if (online) {
+		ret = rproc_remote_online(priv);
 	} else {
-		dev_err(priv->dev, "only 0 or 1 is valid\n");
+		ret = rproc_remote_offline(priv);
 	}
 
-	return 0;
+	return ret == 0 ? size : ret;
 }
-DEFINE_SIMPLE_ATTRIBUTE(online_ops, online_get, online_set, "%llu\n");
+static DEVICE_ATTR_WO(online);
 
-static int auto_restart_get(void *data, u64 *val)
+static ssize_t auto_restart_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	struct rproc_remote_priv *priv = data;
-	*val = priv->auto_restart;
-	return 0;
+	struct rproc_remote_priv *priv = dev_get_drvdata(dev);
+	return sprintf(buf, "%u\n", priv->auto_restart);
 }
-
-static int auto_restart_set(void *data, u64 val)
+static ssize_t auto_restart_store(struct device *dev,
+				  struct device_attribute *attr,
+				  const char *buf, size_t size)
 {
-	struct rproc_remote_priv *priv = data;
+	struct rproc_remote_priv *priv = dev_get_drvdata(dev);
+	bool val;
+	int ret;
+
+	ret = strtobool(buf, &val);
+	if (ret < 0)
+		return ret;
+
 	priv->auto_restart = val;
-	return 0;
+	return size;
 }
-DEFINE_SIMPLE_ATTRIBUTE(auto_restart_ops, auto_restart_get, auto_restart_set,
-			"%llu\n");
+static DEVICE_ATTR_RW(auto_restart);
 
-static int rproc_state_show(struct seq_file *s, void *data)
+static ssize_t state_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	struct rproc_remote_priv *priv = s->private;
-	seq_printf(s, "%s\n", state_string[get_state(priv)]);
-	return 0;
+	struct rproc_remote_priv *priv = dev_get_drvdata(dev);
+	return sprintf(buf, "%s\n", state_string[get_state(priv)]);
 }
+static DEVICE_ATTR_RO(state);
 
-static int rproc_state_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, rproc_state_show, inode->i_private);
-}
-
-static const struct file_operations rproc_state_ops = {
-	.open = rproc_state_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = single_release,
+static struct attribute *rproc_dev_attrs[] = {
+	&dev_attr_online.attr,
+	&dev_attr_auto_restart.attr,
+	&dev_attr_state.attr,
+	NULL,
 };
 
-static struct dentry *dbgfs_root(void)
-{
-	static DEFINE_MUTEX(lck);
-	static struct dentry *dbgfs_root = NULL;
-
-	mutex_lock(&lck);
-	if (dbgfs_root == NULL)
-		dbgfs_root = debugfs_create_dir("nebula_rproc", NULL);
-	mutex_unlock(&lck);
-
-	return dbgfs_root;
-}
+static struct attribute_group rproc_dev_group = {
+	.attrs = rproc_dev_attrs,
+};
 
 static int rproc_remote_probe(struct platform_device *pdev)
 {
@@ -822,13 +815,8 @@ static int rproc_remote_probe(struct platform_device *pdev)
 	priv->state = IDLE;
 	spin_lock_init(&priv->state_lock);
 
-	priv->dbgfs = debugfs_create_dir(pdev->name, dbgfs_root());
-	debugfs_create_file("state", 0400, priv->dbgfs, priv,
-			    &rproc_state_ops);
-	debugfs_create_file("auto_restart", 0644, priv->dbgfs, priv,
-			    &auto_restart_ops);
-	debugfs_create_file("online", 0644, priv->dbgfs, priv,
-			    &online_ops);
+	ret = sysfs_create_group(&dev->kobj, &rproc_dev_group);
+	WARN_ON(ret != 0);
 
 	priv->thread = kthread_run(create_vdev, priv, "rproc_vdev_create");
 	if (IS_ERR(priv->thread)) {

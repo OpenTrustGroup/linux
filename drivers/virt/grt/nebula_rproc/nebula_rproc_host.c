@@ -31,6 +31,8 @@ enum {
 	RPROC_REG_CLEAR_READY = 0x4,
 	RPROC_REG_STATE = 0x8,
 	RPROC_REG_KICK = 0xc,
+	RPROC_REG_PEER_VMID = 0x10,
+	RPROC_REG_PEER_ONLINE = 0x14,
 };
 
 enum {
@@ -231,7 +233,19 @@ static void rproc_host_attach_work(struct work_struct *work)
 	struct rproc_host_priv *priv =
 		container_of(work, struct rproc_host_priv, attach_work);
 	int ret;
-	u32 state = readl_relaxed(priv->reg_base + RPROC_REG_STATE);
+	u32 state, peer_online;
+
+	peer_online = readl_relaxed(priv->reg_base + RPROC_REG_PEER_ONLINE);
+	if (!peer_online) {
+		dev_info(&priv->rproc->dev, "peer is not online\n");
+		if (priv->attached) {
+			rproc_detach(priv->rproc);
+			priv->attached = false;
+		}
+		return;
+	}
+
+	state = readl_relaxed(priv->reg_base + RPROC_REG_STATE);
 	if (state == STATE_READY) {
 		if (priv->attached) {
 			dev_warn(
@@ -240,7 +254,6 @@ static void rproc_host_attach_work(struct work_struct *work)
 			return;
 		}
 
-		writel_relaxed(0, priv->reg_base + RPROC_REG_SET_READY);
 		ret = rproc_boot(priv->rproc);
 		if (ret != 0) {
 			dev_err(&priv->rproc->dev,
@@ -356,6 +369,38 @@ struct dev_pagemap_ops pagemap_ops = {
 	.page_free = rproc_shm_page_free,
 };
 #endif
+
+static ssize_t peer_vmid_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct rproc_host_priv *priv = dev_get_drvdata(dev);
+	return sprintf(buf, "%d\n", readl_relaxed(priv->reg_base + RPROC_REG_PEER_VMID));
+}
+static DEVICE_ATTR_RO(peer_vmid);
+
+static ssize_t peer_online_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct rproc_host_priv *priv = dev_get_drvdata(dev);
+	return sprintf(buf, "%d\n", readl_relaxed(priv->reg_base + RPROC_REG_PEER_ONLINE));
+}
+static DEVICE_ATTR_RO(peer_online);
+
+static ssize_t peer_ready_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct rproc_host_priv *priv = dev_get_drvdata(dev);
+	return sprintf(buf, "%d\n", readl_relaxed(priv->reg_base + RPROC_REG_STATE));
+}
+static DEVICE_ATTR_RO(peer_ready);
+
+static struct attribute *rproc_dev_attrs[] = {
+	&dev_attr_peer_vmid.attr,
+	&dev_attr_peer_online.attr,
+	&dev_attr_peer_ready.attr,
+	NULL,
+};
+
+static struct attribute_group rproc_dev_group = {
+	.attrs = rproc_dev_attrs,
+};
 
 static int rproc_host_probe(struct platform_device *pdev)
 {
@@ -499,6 +544,9 @@ static int rproc_host_probe(struct platform_device *pdev)
 		goto err_remove_rproc;
 
 	platform_set_drvdata(pdev, priv);
+
+	ret = sysfs_create_group(&dev->kobj, &rproc_dev_group);
+	WARN_ON(ret != 0);
 
 	mutex_lock(&rproc_devices_lock);
 	list_add(&priv->node, &rproc_devices);

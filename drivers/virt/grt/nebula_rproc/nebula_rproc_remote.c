@@ -34,6 +34,8 @@ enum {
 	RPROC_REG_SHM_BASE_HIGH = 0xc,
 	RPROC_REG_STATE = 0x10,
 	RPROC_REG_KICK = 0x14,
+	RPROC_REG_PEER_VMID = 0x18,
+	RPROC_REG_PEER_ONLINE = 0x1c,
 };
 
 enum {
@@ -45,8 +47,6 @@ enum {
 	IDLE,
 	CREATING_VDEV,
 	VDEV_CREATED,
-	WAITING_HOST,
-	HOST_READY,
 	DESTROYING_VDEV,
 };
 
@@ -54,8 +54,6 @@ char *state_string[] = {
 	__stringify(IDLE),
 	__stringify(CREATING_VDEV),
 	__stringify(VDEV_CREATED),
-	__stringify(WAITING_HOST),
-	__stringify(HOST_READY),
 	__stringify(DESTROYING_VDEV),
 };
 
@@ -109,6 +107,7 @@ struct rproc_remote_priv {
 	bool need_release;
 
 	int state;
+	bool ready;
 	spinlock_t state_lock;
 	struct dentry *dbgfs;
 	bool auto_restart;
@@ -124,8 +123,6 @@ static void set_state(struct rproc_remote_priv *priv, int state)
 	spin_lock_irqsave(&priv->state_lock, flags);
 	prev_state = priv->state;
 	priv->state = state;
-	if (state == IDLE && priv->auto_restart)
-		complete(&priv->compl);
 	spin_unlock_irqrestore(&priv->state_lock, flags);
 
 	dev_info(priv->dev, "%s -> %s\n",
@@ -142,23 +139,6 @@ static int get_state(struct rproc_remote_priv *priv)
 	spin_unlock_irqrestore(&priv->state_lock, flags);
 
 	return state;
-}
-
-#define WAIT_STATE_TIMEOUT_MSEC 60000
-
-static bool wait_for_state(struct rproc_remote_priv *priv, int expected)
-{
-	unsigned long timeout =
-		jiffies + msecs_to_jiffies(WAIT_STATE_TIMEOUT_MSEC);
-
-	do {
-		if (get_state(priv) == expected)
-			return false;
-
-		mdelay(1);
-	} while (time_before(jiffies, timeout));
-
-	return true;
 }
 
 static LIST_HEAD(rproc_devices);
@@ -296,6 +276,9 @@ static void dump_rsc_table(struct device *dev, void *table)
 static void rproc_vdev_destroy_single(struct rproc_remote_priv *priv, int vdev_idx)
 {
 	struct virtio_device_info *vdev = &priv->vdevs[vdev_idx];
+	struct remoteproc_virtio *rpvdev =
+		container_of(vdev->dev, struct remoteproc_virtio, vdev);
+	struct fw_rsc_vdev *rsc = rpvdev->vdev_rsc;
 	int i;
 
 	for (i = 0; i < vdev->dev->vrings_num; i++) {
@@ -308,6 +291,9 @@ static void rproc_vdev_destroy_single(struct rproc_remote_priv *priv, int vdev_i
 				  irq_info);
 		irq_info->vring_info = NULL;
 	}
+
+	// reset virtio device
+	rsc->status = 0;
 
 	BUG_ON(vdev->ops->on_destroy == NULL);
 	vdev->ops->on_destroy(vdev->dev);
@@ -544,150 +530,120 @@ static void rproc_vdev_destroy(struct rproc_remote_priv *priv)
 static irqreturn_t rproc_ctrl_irq_handler(int irq, void *data)
 {
 	struct rproc_remote_priv *priv = (struct rproc_remote_priv *)data;
-	u32 host_state = readl_relaxed(priv->reg_base + RPROC_REG_STATE);
+	u32 peer_online = readl_relaxed(priv->reg_base + RPROC_REG_PEER_ONLINE);
 
-	smp_mb();
-	if (host_state == STATE_READY) {
-		dev_info(priv->dev, "rproc host is online\n");
-		priv->host_shm_phys =
-			readl_relaxed(priv->reg_base + RPROC_REG_SHM_BASE_LOW);
-		priv->host_shm_phys |=
-			(u64)readl_relaxed(priv->reg_base + RPROC_REG_SHM_BASE_HIGH)
-			<< 32;
+	if (!peer_online)
+		priv->need_release = true;
+	complete(&priv->compl);
+	return IRQ_HANDLED;
+}
 
-		set_state(priv, HOST_READY);
-	} else {
-		dev_info(priv->dev, "rproc host is offline\n");
-		if (get_state(priv) == VDEV_CREATED) {
-			set_state(priv, DESTROYING_VDEV);
-			rproc_vdev_destroy(priv);
-			set_state(priv, IDLE);
-		} else {
-			priv->need_release = true;
-		}
+static void get_host_shm_base_addr(struct rproc_remote_priv *priv) {
+	priv->host_shm_phys =
+		readl_relaxed(priv->reg_base + RPROC_REG_SHM_BASE_LOW);
+	priv->host_shm_phys |=
+		(u64)readl_relaxed(priv->reg_base + RPROC_REG_SHM_BASE_HIGH)
+		<< 32;
+}
+
+static int handle_idle(struct rproc_remote_priv *priv)
+{
+	u32 peer_online = readl_relaxed(priv->reg_base + RPROC_REG_PEER_ONLINE);
+
+	if (peer_online && priv->ready) {
+		get_host_shm_base_addr(priv);
+
+		writel_relaxed(0, priv->reg_base + RPROC_REG_SET_READY);
+		complete(&priv->compl);
+		return CREATING_VDEV;
 	}
 
-	return IRQ_HANDLED;
+	return IDLE;
+}
+
+static int handle_creating_vdev(struct rproc_remote_priv *priv)
+{
+	int ret = create_rproc_vdev(priv);
+
+	if (ret == 0) {
+		return VDEV_CREATED;
+	} else {
+		return IDLE;
+	}
+}
+
+static int handle_vdev_created(struct rproc_remote_priv *priv)
+{
+	u32 peer_online = readl_relaxed(priv->reg_base + RPROC_REG_PEER_ONLINE);
+
+	if (!peer_online || !priv->ready) {
+		writel_relaxed(0, priv->reg_base + RPROC_REG_CLEAR_READY);
+		complete(&priv->compl);
+		return DESTROYING_VDEV;
+	}
+
+	return VDEV_CREATED;
+}
+
+static int handle_destroying_vdev(struct rproc_remote_priv *priv)
+{
+	rproc_vdev_destroy(priv);
+	return IDLE;
 }
 
 static int create_vdev(void *args)
 {
 	struct rproc_remote_priv *priv = (struct rproc_remote_priv *)args;
-	bool timeout;
-	int state, ret;
+	int state, next_state;
 
 	while (!kthread_should_stop()) {
-		dev_dbg(priv->dev, "rproc wait for create vdev event ...\n");
 		wait_for_completion_interruptible(&priv->compl);
 
 		state = get_state(priv);
-		if (state == DESTROYING_VDEV) {
-			timeout = wait_for_state(priv, IDLE);
-			if (timeout) {
-				dev_err(priv->dev,
-					"waiting for IDLE timeout "
-					"(hang in destroying vdev?)\n");
-				set_state(priv, IDLE);
-				continue;
-			}
+		switch (state) {
+		case IDLE:
+			next_state = handle_idle(priv);
+			break;
+		case CREATING_VDEV:
+			next_state = handle_creating_vdev(priv);
+			break;
+		case VDEV_CREATED:
+			next_state = handle_vdev_created(priv);
+			break;
+		case DESTROYING_VDEV:
+			next_state = handle_destroying_vdev(priv);
+			break;
+		default:
+			BUG();
 		}
 
-		set_state(priv, WAITING_HOST);
-		writel_relaxed(0, priv->reg_base + RPROC_REG_SET_READY);
-
-		timeout = wait_for_state(priv, HOST_READY);
-		if (timeout) {
-			dev_err(priv->dev,
-				"waiting for HOST_READY timeout "
-				"(nebula_rproc_host driver is not loaded?)\n");
-			set_state(priv, IDLE);
-			writel_relaxed(0, priv->reg_base + RPROC_REG_CLEAR_READY);
-			continue;
-		}
-
-		set_state(priv, CREATING_VDEV);
-		ret = create_rproc_vdev(priv);
-		if (ret == 0) {
-			set_state(priv, VDEV_CREATED);
-		} else {
-			set_state(priv, IDLE);
-		}
+		set_state(priv, next_state);
 	}
 	return 0;
 }
 
-static int rproc_remote_online(struct rproc_remote_priv *priv)
-{
-	int state = get_state(priv);
-
-	if (state == IDLE || state == DESTROYING_VDEV) {
-		complete(&priv->compl);
-		return 0;
-	} else {
-		dev_err(priv->dev, "bad state: %s\n", state_string[state]);
-		return -EBUSY;
-	}
-}
-
-static int rproc_remote_offline(struct rproc_remote_priv *priv)
-{
-	int state = get_state(priv);
-
-	if (state == VDEV_CREATED) {
-		writel_relaxed(0, priv->reg_base + RPROC_REG_CLEAR_READY);
-		set_state(priv, DESTROYING_VDEV);
-		rproc_vdev_destroy(priv);
-		set_state(priv, IDLE);
-		return 0;
-	} else {
-		dev_err(priv->dev, "bad state: %s\n", state_string[state]);
-		return -EBUSY;
-	}
-}
-
-static ssize_t online_store(struct device *dev,
-			    struct device_attribute *attr,
-			    const char *buf, size_t size)
+static ssize_t ready_show(struct device *dev, struct device_attribute *attr,
+			  char *buf)
 {
 	struct rproc_remote_priv *priv = dev_get_drvdata(dev);
-	bool online;
+	return sprintf(buf, "%u\n", priv->ready);
+}
+static ssize_t ready_store(struct device *dev, struct device_attribute *attr,
+			   const char *buf, size_t size)
+{
+	struct rproc_remote_priv *priv = dev_get_drvdata(dev);
+	bool ready;
 	int ret;
 
-	ret = strtobool(buf, &online);
+	ret = strtobool(buf, &ready);
 	if (ret < 0)
 		return ret;
 
-	if (online) {
-		ret = rproc_remote_online(priv);
-	} else {
-		ret = rproc_remote_offline(priv);
-	}
-
+	priv->ready = ready;
+	complete(&priv->compl);
 	return ret == 0 ? size : ret;
 }
-static DEVICE_ATTR_WO(online);
-
-static ssize_t auto_restart_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	struct rproc_remote_priv *priv = dev_get_drvdata(dev);
-	return sprintf(buf, "%u\n", priv->auto_restart);
-}
-static ssize_t auto_restart_store(struct device *dev,
-				  struct device_attribute *attr,
-				  const char *buf, size_t size)
-{
-	struct rproc_remote_priv *priv = dev_get_drvdata(dev);
-	bool val;
-	int ret;
-
-	ret = strtobool(buf, &val);
-	if (ret < 0)
-		return ret;
-
-	priv->auto_restart = val;
-	return size;
-}
-static DEVICE_ATTR_RW(auto_restart);
+static DEVICE_ATTR_RW(ready);
 
 static ssize_t state_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
@@ -696,10 +652,26 @@ static ssize_t state_show(struct device *dev, struct device_attribute *attr, cha
 }
 static DEVICE_ATTR_RO(state);
 
+static ssize_t peer_vmid_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct rproc_remote_priv *priv = dev_get_drvdata(dev);
+	return sprintf(buf, "%d\n", readl_relaxed(priv->reg_base + RPROC_REG_PEER_VMID));
+}
+static DEVICE_ATTR_RO(peer_vmid);
+
+static ssize_t peer_online_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct rproc_remote_priv *priv = dev_get_drvdata(dev);
+	return sprintf(buf, "%d\n", readl_relaxed(priv->reg_base + RPROC_REG_PEER_ONLINE));
+}
+static DEVICE_ATTR_RO(peer_online);
+
+
 static struct attribute *rproc_dev_attrs[] = {
-	&dev_attr_online.attr,
-	&dev_attr_auto_restart.attr,
+	&dev_attr_ready.attr,
 	&dev_attr_state.attr,
+	&dev_attr_peer_vmid.attr,
+	&dev_attr_peer_online.attr,
 	NULL,
 };
 

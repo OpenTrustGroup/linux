@@ -275,6 +275,17 @@ static void vhost_dev_flush(struct vhost_net *n) {
 	drain_workqueue(n->rx_workq);
 }
 
+static void vhost_dev_stop(struct vhost_net *n)
+{
+	int i;
+
+	for (i = 0; i < VHOST_NET_VQ_MAX; ++i) {
+		vhost_poll_stop(&n->poll[i]);
+	}
+
+	vhost_dev_flush(n);
+}
+
 static unsigned vhost_net_zcopy_mask __read_mostly;
 
 static inline size_t kvec_length(const struct kvec* iov, unsigned long nr_segs)
@@ -1832,13 +1843,9 @@ static void vhost_net_device_destroy(struct virtio_device *vdev)
 
 	vhost_net_stop(n, &tx_sock, &rx_sock);
 	vhost_net_flush(n);
-	// vhost_dev_stop(&n->dev);
-	// vhost_dev_cleanup(&n->dev);
+	vhost_dev_stop(n);
 	vhost_net_vq_reset(n);
-	if (tx_sock)
-		sockfd_put(tx_sock);
-	if (rx_sock)
-		sockfd_put(rx_sock);
+
 	/* Make sure no callbacks are outstanding */
 	synchronize_rcu();
 	/* We do an extra flush before freeing memory,

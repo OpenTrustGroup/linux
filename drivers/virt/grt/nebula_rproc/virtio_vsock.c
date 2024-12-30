@@ -9,6 +9,8 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include "../af_vsockx/rename_symbols.h"
+
 #include <linux/module.h>
 #include <linux/of_platform.h>
 #include <linux/delay.h>
@@ -19,9 +21,6 @@
 #include "virtqueue.h"
 #include "virtio.h"
 #include "virtio_vsock.h"
-
-int x_vsock_core_register(const struct vsock_transport *t, int features);
-void x_vsock_core_unregister(const struct vsock_transport *t);
 
 #define VIRTIO_ID_VSOCKX 0x81
 
@@ -134,7 +133,7 @@ static void vhost_transport_do_send_pkt(struct vhost_vsock *vsock,
 	bool added = false;
 	bool restart_tx = false;
 
-	// mutex_lock(&vq->mutex);
+	mutex_lock(&vq->mutex);
 
 	/* Avoid further vmexits, we're already processing the virtqueue */
 	virtqueue_disable_cb(vq);
@@ -293,7 +292,7 @@ static void vhost_transport_do_send_pkt(struct vhost_vsock *vsock,
 	if (added)
 		virtqueue_kick(vq);
 
-	// mutex_unlock(&vq->mutex);
+	mutex_unlock(&vq->mutex);
 
 	if (restart_tx)
 		vsock_tx_callback(tx_vq);
@@ -757,7 +756,7 @@ static struct nebula_rproc_vdev_ops vsock_vdev_ops = {
 
 static int __init nebula_virtio_vsocket_init(void)
 {
-	int ret = x_vsock_core_register(&vhost_transport.transport,
+	int ret = vsock_core_register(&vhost_transport.transport,
 					VSOCK_TRANSPORT_F_H2G);
 	if (ret < 0)
 		return ret;
@@ -765,7 +764,7 @@ static int __init nebula_virtio_vsocket_init(void)
 	ret = nebula_rproc_register_device(
 		&vsock_vdev_desc, sizeof(vsock_vdev_desc), &vsock_vdev_ops);
 	if (ret) {
-		x_vsock_core_unregister(&vhost_transport.transport);
+		vsock_core_unregister(&vhost_transport.transport);
 		return ret;
 	}
 	return 0;

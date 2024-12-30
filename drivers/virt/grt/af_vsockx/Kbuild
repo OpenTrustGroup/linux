@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
 
 obj-y   += af_vsock.o
+obj-y	+= virtio_transport_common.o
 obj-y   += virtio_transport.o

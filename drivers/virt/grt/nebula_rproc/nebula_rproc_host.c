@@ -314,6 +314,10 @@ static void *rproc_alloc_coherent(struct device *dev, size_t size,
 	dev_dbg(dev,
 		"rproc_alloc_coherent: addr=%px, size=%lx, dma_addr=%llx, attrs=%lx\n",
 		ptr, size, *dma_addr, attrs);
+	if (ptr == NULL) {
+		dev_err(dev, "failed to allocate memory from shm pool\n");
+		return ptr;
+	}
 
 #if defined(CONFIG_ZONE_DEVICE)
 	if (order)
@@ -327,6 +331,12 @@ static void rproc_free_coherent(struct device *dev, size_t size, void *vaddr,
 				dma_addr_t dma_addr, unsigned long attrs)
 {
 	struct rproc_host_priv *priv = to_priv(dev);
+
+#if defined(CONFIG_ZONE_DEVICE)
+	int order = get_order(size);
+
+	size = 1 << (PAGE_SHIFT + order);
+#endif
 
 	dev_dbg(dev, "rproc_free_coherent: addr=%llx size=%lx, attrs=%lx\n",
 		dma_addr, size, attrs);

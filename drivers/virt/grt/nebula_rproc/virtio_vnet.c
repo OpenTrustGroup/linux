@@ -164,6 +164,7 @@ struct vhost_net_virtqueue {
 	struct xdp_buff *xdp;
 };
 
+struct vhost_net;
 struct vhost_poll {
 	poll_table		table;
 	wait_queue_head_t	*wqh;
@@ -171,7 +172,39 @@ struct vhost_poll {
 	struct work_struct	work;
 	__poll_t		mask;
 	struct workqueue_struct	*workq;
+	struct vhost_net       *net;
 };
+
+struct vhost_net {
+	struct vhost_net_virtqueue vqs[VHOST_NET_VQ_MAX];
+	struct vhost_poll poll[VHOST_NET_VQ_MAX];
+	/* Number of TX recently submitted.
+	 * Protected by tx vq lock. */
+	unsigned tx_packets;
+	/* Number of times zerocopy TX recently failed.
+	 * Protected by tx vq lock. */
+	unsigned tx_zcopy_err;
+	/* Flush in progress. Protected by tx vq lock. */
+	bool tx_flush;
+	/* Private page frag */
+	struct page_frag page_frag;
+	/* Refcount bias of page frag */
+	int refcnt_bias;
+
+	struct workqueue_struct* workq;
+	struct mutex mutex;
+
+	atomic_t pending_work_count;
+	int weight;
+	int byte_weight;
+};
+
+static void vhost_work_queue(struct vhost_net *net, struct work_struct *work)
+{
+	if (queue_work(net->workq, work)) {
+		atomic_inc(&net->pending_work_count);
+	}
+}
 
 static int vhost_poll_wakeup(wait_queue_entry_t *wait, unsigned mode, int sync,
 			     void *key)
@@ -181,7 +214,7 @@ static int vhost_poll_wakeup(wait_queue_entry_t *wait, unsigned mode, int sync,
 	if (!(key_to_poll(key) & poll->mask))
 		return 0;
 
-	queue_work(poll->workq, &poll->work);
+	vhost_work_queue(poll->net, &poll->work);
 	return 0;
 }
 
@@ -195,20 +228,15 @@ static void vhost_poll_func(struct file *file, wait_queue_head_t *wqh,
 	add_wait_queue(wqh, &poll->wait);
 }
 
-static void vhost_poll_queue(struct vhost_poll *poll)
-{
-	BUG_ON(poll == NULL);
-	queue_work(poll->workq, &poll->work);
-}
-
 static void vhost_poll_init(struct vhost_poll *poll, work_func_t fn,
-		     __poll_t mask, struct workqueue_struct *workq)
+		     __poll_t mask, struct vhost_net *net)
 {
 	init_waitqueue_func_entry(&poll->wait, vhost_poll_wakeup);
 	init_poll_funcptr(&poll->table, vhost_poll_func);
 	poll->mask = mask;
 	poll->wqh = NULL;
-	poll->workq = workq;
+	poll->net = net;
+	poll->workq = net->workq;
 
 	INIT_WORK(&poll->work, fn);
 }
@@ -244,35 +272,31 @@ static int vhost_poll_start(struct vhost_poll *poll, struct file *file)
 	return 0;
 }
 
-// TODO: this simply disabled busy poll mechanism
-static bool vhost_has_work(void) {
-	return true;
+/* A lockless hint for busy polling code to exit the loop */
+static bool vhost_has_work(struct vhost_net *net)
+{
+	return atomic_read(&net->pending_work_count) != 0;
 }
 
-struct vhost_net {
-	struct vhost_net_virtqueue vqs[VHOST_NET_VQ_MAX];
-	struct vhost_poll poll[VHOST_NET_VQ_MAX];
-	/* Number of TX recently submitted.
-	 * Protected by tx vq lock. */
-	unsigned tx_packets;
-	/* Number of times zerocopy TX recently failed.
-	 * Protected by tx vq lock. */
-	unsigned tx_zcopy_err;
-	/* Flush in progress. Protected by tx vq lock. */
-	bool tx_flush;
-	/* Private page frag */
-	struct page_frag page_frag;
-	/* Refcount bias of page frag */
-	int refcnt_bias;
+static void vhost_poll_queue(struct vhost_poll *poll)
+{
+	vhost_work_queue(poll->net, &poll->work);
+}
 
-	struct workqueue_struct* tx_workq;
-	struct workqueue_struct* rx_workq;
-	struct mutex mutex;
-};
+static bool vhost_exceeds_weight(struct vhost_net *net, struct virtqueue *vq,
+				 int pkts, int total_len)
+{
+	if ((net->byte_weight && total_len >= net->byte_weight) ||
+	    pkts >= net->weight) {
+		vhost_poll_queue(vq->poll);
+		return true;
+	}
+
+	return false;
+}
 
 static void vhost_dev_flush(struct vhost_net *n) {
-	drain_workqueue(n->tx_workq);
-	drain_workqueue(n->rx_workq);
+	drain_workqueue(n->workq);
 }
 
 static void vhost_dev_stop(struct vhost_net *n)
@@ -692,7 +716,7 @@ static void vhost_net_busy_poll(struct vhost_net *net,
 	endtime = busy_clock() + busyloop_timeout;
 
 	while (vhost_can_busy_poll(endtime)) {
-		if (vhost_has_work()) {
+		if (vhost_has_work(net)) {
 			*busyloop_intr = true;
 			break;
 		}
@@ -931,6 +955,7 @@ static void handle_tx_copy(struct vhost_net *net, struct socket *sock)
 	};
 	size_t len, total_len = 0;
 	int err;
+	int sent_pkts = 0;
 	bool sock_can_batch = (sock->sk->sk_sndbuf == INT_MAX);
 
 	do {
@@ -1001,7 +1026,7 @@ done:
 		vq->heads[nvq->done_idx].id = cpu_to_le32(head);
 		vq->heads[nvq->done_idx].len = 0;
 		++nvq->done_idx;
-	} while (true);
+	} while (likely(!vhost_exceeds_weight(net, vq, ++sent_pkts, total_len)));
 
 	vhost_tx_batch(net, nvq, sock, &msg);
 }
@@ -1025,6 +1050,7 @@ static void handle_tx_zerocopy(struct vhost_net *net, struct socket *sock)
 	struct vhost_net_ubuf_ref *ubufs;
 	struct ubuf_info_msgzc *ubuf;
 	bool zcopy_used;
+	int sent_pkts = 0;
 
 	do {
 		bool busyloop_intr;
@@ -1109,7 +1135,7 @@ static void handle_tx_zerocopy(struct vhost_net *net, struct socket *sock)
 		else
 			vhost_zerocopy_signal_used(net, nvq);
 		vhost_net_tx_packet(net);
-	} while (true);
+	} while (likely(!vhost_exceeds_weight(net, vq, ++sent_pkts, total_len)));
 }
 
 /* Expects to be always run from workqueue - which acts as
@@ -1274,6 +1300,7 @@ static void handle_rx(struct vhost_net *net)
 	struct socket *sock;
 	struct iov_iter fixup;
 	__virtio16 num_buffers;
+	int recv_pkts = 0;
 
 	TRACE_FUNC_BEGIN();
 	mutex_lock_nested(&vq->mutex, VHOST_NET_VQ_RX);
@@ -1375,7 +1402,7 @@ static void handle_rx(struct vhost_net *net)
 		if (nvq->done_idx > VHOST_NET_BATCH)
 			vhost_net_signal_used(nvq);
 		total_len += vhost_len;
-	} while (true);
+	} while (likely(!vhost_exceeds_weight(net, vq, ++recv_pkts, total_len)));
 
 	if (unlikely(busyloop_intr))
 		vhost_poll_queue(vq->poll);
@@ -1393,7 +1420,7 @@ static void handle_tx_kick(struct virtqueue *vq)
 	struct vhost_net *net = vdev->priv;
 
 	TRACE_FUNC_BEGIN();
-	handle_tx(net);
+	vhost_work_queue(net, &net->poll[VHOST_NET_VQ_TX].work);
 	TRACE_FUNC_END();
 }
 
@@ -1403,7 +1430,7 @@ static void handle_rx_kick(struct virtqueue *vq)
 	struct vhost_net *net = vdev->priv;
 
 	TRACE_FUNC_BEGIN();
-	handle_rx(net);
+	vhost_work_queue(net, &net->poll[VHOST_NET_VQ_RX].work);
 	TRACE_FUNC_END();
 }
 
@@ -1411,6 +1438,8 @@ static void handle_tx_net(struct work_struct *work)
 {
 	struct vhost_net *net = container_of(work, struct vhost_net,
 					     poll[VHOST_NET_VQ_TX].work);
+
+	atomic_dec(&net->pending_work_count);
 	TRACE_FUNC_BEGIN();
 	handle_tx(net);
 	TRACE_FUNC_END();
@@ -1420,6 +1449,8 @@ static void handle_rx_net(struct work_struct *work)
 {
 	struct vhost_net *net = container_of(work, struct vhost_net,
 					     poll[VHOST_NET_VQ_RX].work);
+
+	atomic_dec(&net->pending_work_count);
 	TRACE_FUNC_BEGIN();
 	handle_rx(net);
 	TRACE_FUNC_END();
@@ -1759,18 +1790,11 @@ static int vhost_net_device_create(struct virtio_device *vdev,
 	}
 	n->vqs[VHOST_NET_VQ_TX].xdp = xdp;
 
-	n->tx_workq = alloc_workqueue("vhost_net_tx",
-					WQ_MEM_RECLAIM | WQ_HIGHPRI | WQ_UNBOUND, 1);
-	if (!n->tx_workq) {
+	n->workq = alloc_workqueue("rproc_net",
+				    WQ_MEM_RECLAIM | WQ_HIGHPRI | WQ_UNBOUND, 1);
+	if (!n->workq) {
 		ret = -ENOMEM;
 		goto err_free_vhost_net;
-	}
-
-	n->rx_workq = alloc_workqueue("vhost_net_rx",
-					WQ_MEM_RECLAIM | WQ_HIGHPRI | WQ_UNBOUND, 1);
-	if (!n->rx_workq) {
-		ret = -ENOMEM;
-		goto err_destroy_tx_vq;
 	}
 
 	vq_names[0] = "rx_vq";
@@ -1782,7 +1806,7 @@ static int vhost_net_device_create(struct virtio_device *vdev,
 	if (vq_err != VQUEUE_SUCCESS) {
 		pr_err("failed to create virtqueue, err=%d\n", vq_err);
 		ret = -EIO;
-		goto err_destroy_rx_vq;
+		goto err_destroy_workq;
 	}
 
 	ret = vhost_net_set_ubuf_info(n);
@@ -1807,12 +1831,15 @@ static int vhost_net_device_create(struct virtio_device *vdev,
 		vhost_net_buf_init(&n->vqs[i].rxq);
 	}
 
-	vhost_poll_init(n->poll + VHOST_NET_VQ_TX, handle_tx_net, EPOLLOUT, n->tx_workq);
-	vhost_poll_init(n->poll + VHOST_NET_VQ_RX, handle_rx_net, EPOLLIN, n->rx_workq);
+	vhost_poll_init(n->poll + VHOST_NET_VQ_TX, handle_tx_net, EPOLLOUT, n);
+	vhost_poll_init(n->poll + VHOST_NET_VQ_RX, handle_rx_net, EPOLLIN, n);
 	mutex_init(&n->mutex);
 
 	n->page_frag.page = NULL;
 	n->refcnt_bias = 0;
+	n->byte_weight = VHOST_NET_WEIGHT;
+	n->weight = VHOST_NET_PKT_WEIGHT;
+	atomic_set(&n->pending_work_count, 0);
 
 	vdev->priv = n;
 
@@ -1824,10 +1851,8 @@ static int vhost_net_device_create(struct virtio_device *vdev,
 
 err_release_virtqueues:
 	virtio_delete_virtqueues(vdev);
-err_destroy_rx_vq:
-	destroy_workqueue(n->rx_workq);
-err_destroy_tx_vq:
-	destroy_workqueue(n->tx_workq);
+err_destroy_workq:
+	destroy_workqueue(n->workq);
 err_free_vhost_net:
 	kvfree(n);
 	kfree(queue);

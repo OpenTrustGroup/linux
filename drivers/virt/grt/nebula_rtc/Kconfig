@@ -1,0 +1,4 @@
+
+config GRT_NEBULA_RTC
+	depends on GRT_HYPERVISOR_SUPPORT
+	tristate "Sync SOS RTC to Nebula"

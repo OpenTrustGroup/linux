@@ -17,6 +17,8 @@ obj-y += i2c_vhost/
 obj-y += vhost_cmdq/
 obj-y += power_service/
 obj-y += samples/
+obj-y += nebula_rtc/
+
 ## normal Makefile
 #SUBDIRS := $(wildcard */.)
 #

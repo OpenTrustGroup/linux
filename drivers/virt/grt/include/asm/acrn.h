@@ -8,6 +8,18 @@
 void acrn_setup_intr_handler(void (*handler)(void));
 void acrn_remove_intr_handler(void);
 
+static inline long acrn_hypercall5_res(unsigned long hcall_id, unsigned long param1,
+				   unsigned long param2, unsigned long param3,
+				   unsigned long param4, unsigned long param5,
+				   struct arm_smccc_res *res)
+{
+	unsigned long r7 = SMC_HYP_SECURE_ID << 16;
+
+	arm_smccc_smc(SMC_SC_NBL_VHM_REQ, hcall_id, param1, param2, param3,
+		      param4, param5, r7, res);
+	return res->a0;
+}
+
 static inline long acrn_hypercall5(unsigned long hcall_id, unsigned long param1,
 				   unsigned long param2, unsigned long param3,
 				   unsigned long param4, unsigned long param5)

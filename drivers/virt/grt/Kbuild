@@ -23,3 +23,4 @@ obj-y += vhost/
 obj-y += vhost_dmabuf/
 obj-y += nebula_rproc/
 obj-y += af_vsockx/
+obj-y += nebula_rtc/

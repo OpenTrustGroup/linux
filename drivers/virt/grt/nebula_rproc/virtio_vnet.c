@@ -83,8 +83,7 @@ MODULE_PARM_DESC(experimental_zcopytx, "Enable Zero Copy TX;"
 #define VHOST_NET_F_VIRTIO_NET_HDR 27
 
 enum {
-	VHOST_NET_FEATURES =
-			 (1ULL << VHOST_NET_F_VIRTIO_NET_HDR)
+	VHOST_NET_FEATURES = 0
 };
 
 enum {

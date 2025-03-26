@@ -113,6 +113,7 @@ struct rproc_remote_priv {
 	bool auto_restart;
 
 	struct list_head node;
+	bool force_offline;
 };
 
 static void set_state(struct rproc_remote_priv *priv, int state)
@@ -576,6 +577,9 @@ static int handle_vdev_created(struct rproc_remote_priv *priv)
 {
 	u32 peer_online = readl_relaxed(priv->reg_base + RPROC_REG_PEER_ONLINE);
 
+	if (priv->force_offline)
+		peer_online = false;
+
 	if (!peer_online || !priv->ready) {
 		writel_relaxed(0, priv->reg_base + RPROC_REG_CLEAR_READY);
 		complete(&priv->compl);
@@ -666,12 +670,29 @@ static ssize_t peer_online_show(struct device *dev, struct device_attribute *att
 }
 static DEVICE_ATTR_RO(peer_online);
 
+static ssize_t force_offline_store(struct device *dev, struct device_attribute *attr,
+			     const char *buf, size_t size)
+{
+	struct rproc_remote_priv *priv = dev_get_drvdata(dev);
+	int ret = 0;
+	bool force_offline;
+
+	ret = strtobool(buf, &force_offline);
+	if (ret < 0)
+		return ret;
+
+	priv->force_offline = force_offline;
+	complete(&priv->compl);
+	return ret == 0 ? size : ret;
+}
+static DEVICE_ATTR_WO(force_offline);
 
 static struct attribute *rproc_dev_attrs[] = {
 	&dev_attr_ready.attr,
 	&dev_attr_state.attr,
 	&dev_attr_peer_vmid.attr,
 	&dev_attr_peer_online.attr,
+	&dev_attr_force_offline.attr,
 	NULL,
 };
 

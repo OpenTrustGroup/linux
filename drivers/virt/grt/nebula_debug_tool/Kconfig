@@ -1,0 +1,4 @@
+
+config GRT_NEBULA_DEBUG_TOOL
+	depends on GRT_HYPERVISOR_SUPPORT
+	tristate "Miscellaneous debug tool for Nebula"

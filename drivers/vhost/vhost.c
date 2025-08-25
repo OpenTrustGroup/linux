@@ -619,7 +619,7 @@ static void vhost_workers_free(struct vhost_dev *dev)
 	xa_destroy(&dev->worker_xa);
 }
 
-static struct vhost_worker *vhost_worker_create(struct vhost_dev *dev)
+struct vhost_worker *vhost_worker_create(struct vhost_dev *dev)
 {
 	struct vhost_worker *worker;
 	struct vhost_task *vtsk;
@@ -708,6 +708,14 @@ static void __vhost_vq_attach_worker(struct vhost_virtqueue *vq,
 	vhost_worker_flush(old_worker);
 	mutex_unlock(&old_worker->mutex);
 }
+
+/* extend the attach api for vsock */
+void vhost_vq_attach_worker_external(struct vhost_virtqueue *vq,
+		struct vhost_worker *worker)
+{
+	__vhost_vq_attach_worker(vq, worker);
+}
+EXPORT_SYMBOL_GPL(vhost_vq_attach_worker_external);
 
  /* Caller must have device mutex */
 static int vhost_vq_attach_worker(struct vhost_virtqueue *vq,

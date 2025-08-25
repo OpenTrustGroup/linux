@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Support GKI mixed build
+
+ifeq ($(DEVICE_MODULES_PATH),)
+DEVICE_MODULES_PATH = $(srctree)
+else
+LINUXINCLUDE := $(DEVCIE_MODULES_INCLUDE) $(LINUXINCLUDE)
+endif
+
+
+subdir-ccflags-y += \
+	-I$(DEVICE_MODULES_PATH)/include/ \
+	-I$(DEVICE_MODULES_PATH)/drivers/vhost/ \
+	-I$(KERNEL_SRC)/drivers/vhost/
+
+ccflags-y += -Wno-error=unused-function
+
+obj-y += vmw_vsock_virtio_transport_common.o
+vmw_vsock_virtio_transport_common-y += virtio_transport_common.o
+
+obj-y += vsocket.o
+vsocket-y += af_vsock.o af_vsock_tap.o vsock_addr.o vsock_bpf.o
+
+obj-y += vsock_loopback.o
+
+obj-y += vsock_diag.o
+vsock_diag-y = diag.o

@@ -5,6 +5,7 @@
 #include <linux/compat.h>
 #include <linux/eventfd.h>
 #include <linux/vhost.h>
+#include <linux/version.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -41,6 +42,8 @@
 
 #define SHRINK_REQ_COUNT 0
 #define SHRINK_REQ_SCAN 1
+
+#define VHOST_ALLOC_SET_RUNNING     _IOW(VHOST_VIRTIO, 0x81, int)
 
 enum {
 	ALLOC_VQ = 0,
@@ -1100,8 +1103,13 @@ static int vhost_alloc_open(struct inode *inode, struct file *f)
 	request_queue_init(&n->alloc_queue);
 	request_queue_init(&n->release_queue);
 	spin_lock_init(&n->list_lock);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+	vhost_poll_init(&n->poll_alloc, handle_alloc_host_kick, EPOLLIN, dev, vqs[ALLOC_VQ]);
+	vhost_poll_init(&n->poll_release, handle_release_host_kick, EPOLLIN, dev, vqs[RELEASE_VQ]);
+#else
 	vhost_poll_init(&n->poll_alloc, handle_alloc_host_kick, EPOLLIN, dev);
 	vhost_poll_init(&n->poll_release, handle_release_host_kick, EPOLLIN, dev);
+#endif
 #if defined(CONFIG_DEBUG_FS)
 	page_pool_init(&n->page_pool);
 #endif
@@ -1260,6 +1268,60 @@ static int vhost_alloc_setup(struct vhost_alloc *valloc, void __user *argp)
 	return 0;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+struct vhost_task {
+	bool (*fn)(void *data);
+	void *data;
+	struct completion exited;
+	unsigned long flags;
+	struct task_struct *task;
+};
+
+static struct task_struct *vhost_worker_get_task(struct vhost_worker *worker)
+{
+	return worker->vtsk->task;
+}
+#else
+static struct task_struct *vhost_worker_get_task(struct vhost_worker *worker)
+{
+	return worker->task;
+}
+#endif
+
+extern struct vhost_worker *vhost_worker_create_with_name(struct vhost_dev *dev,
+							  const char *name);
+extern void vhost_vq_attach_worker_external(struct vhost_virtqueue *vq,
+					    struct vhost_worker *worker);
+
+static int vhost_alloc_create_worker(struct vhost_alloc *n)
+{
+	cpumask_t mask;
+	int i;
+	struct vhost_worker *vhost_worker;
+
+	vhost_worker =
+		vhost_worker_create_with_name(&n->dev, "vhost_alloc_worker");
+	if (vhost_worker) {
+		vhost_vq_attach_worker_external(&n->vqs[ALLOC_VQ].vq,
+						vhost_worker);
+		vhost_vq_attach_worker_external(&n->vqs[RELEASE_VQ].vq,
+						vhost_worker);
+		vhost_vq_attach_worker_external(&n->vqs[REPLY_VQ].vq,
+						vhost_worker);
+		vhost_vq_attach_worker_external(&n->vqs[SHRINKER_VQ].vq,
+						vhost_worker);
+	} else {
+		pr_info("not able to create vhost worker\n");
+		return -ENOMEM;
+	}
+
+	cpumask_clear(&mask);
+	for (i = 4; i < 8; i++)
+		cpumask_set_cpu(i, &mask);
+	set_cpus_allowed_ptr(vhost_worker_get_task(vhost_worker), &mask);
+	return 0;
+}
+
 static long vhost_alloc_ioctl(struct file *f, unsigned int ioctl,
 			      unsigned long arg)
 {
@@ -1284,6 +1346,8 @@ static long vhost_alloc_ioctl(struct file *f, unsigned int ioctl,
 		return vhost_alloc_set_features(n, features);
 	case VHOST_RESET_OWNER:
 		return vhost_alloc_reset_owner(n);
+    case VHOST_ALLOC_SET_RUNNING:
+		return vhost_alloc_create_worker(n);
 	default:
 		mutex_lock(&n->dev.mutex);
 		r = vhost_dev_ioctl(&n->dev, ioctl, argp);

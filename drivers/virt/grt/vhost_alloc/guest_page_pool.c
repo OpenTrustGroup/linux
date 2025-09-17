@@ -118,13 +118,15 @@ struct guest_page_pool {
 	atomic_long_t free_count;
 
 	spinlock_t lock;
-	struct delayed_work watermark_work;
 	atomic_t worker_running;
 	struct timer_list timer;
 	struct kobject *kobj;
 	atomic_t state;
 
 	struct dentry *debugfs_dir;
+	struct kthread_worker kthread_worker;
+	struct task_struct *worker_task;
+	struct kthread_delayed_work watermark_work;
 
 #if GUEST_POOL_STATS
 	atomic_long_t using_count;
@@ -260,7 +262,7 @@ static void drain_to_high_watermark(struct guest_page_pool *pool)
 /*
  * Monitoring the high/low watermark to refill/drain the pages.
  */
-static void watermark_worker(struct work_struct *work)
+static void watermark_worker(struct kthread_work *work)
 {
 	struct guest_page_pool *pool = container_of(work, struct guest_page_pool,
 			watermark_work.work);
@@ -294,7 +296,7 @@ static void timer_callback(struct timer_list *t) {
 
 	/* if worker is already running just quit */
 	if (!atomic_read(&pool->worker_running))
-		queue_delayed_work(system_wq, &pool->watermark_work, 0);
+		kthread_queue_delayed_work(&pool->kthread_worker, &pool->watermark_work, 0);
 
 	mod_timer(&pool->timer,
 			jiffies + msecs_to_jiffies(monitor_interval_ms));
@@ -636,6 +638,27 @@ void drain_guest_pool(u32 *pfns, u32 count, u32 *actual_count, void *ctx)
 		*actual_count = j;
 }
 
+static int create_worker_thread(struct guest_page_pool *pool)
+{
+	kthread_init_worker(&pool->kthread_worker);
+	pool->worker_task = kthread_run(
+		kthread_worker_fn, &pool->kthread_worker, "watermark_worker");
+	if (IS_ERR(pool->worker_task))
+		return PTR_ERR(pool->worker_task);
+
+	kthread_init_delayed_work(&pool->watermark_work, watermark_worker);
+	return 0;
+}
+
+static void destroy_worker_thread(struct guest_page_pool *pool)
+{
+	if (pool->worker_task) {
+		kthread_cancel_delayed_work_sync(&pool->watermark_work);
+		kthread_stop(pool->worker_task);
+		pool->worker_task = NULL;
+	}
+}
+
 int guest_pool_init(void)
 {
 	struct guest_page_pool *pool;
@@ -657,7 +680,6 @@ int guest_pool_init(void)
 	atomic_long_set(&pool->free_count, 0);
 	spin_lock_init(&pool->lock);
 	atomic_set(&pool->worker_running, 0);
-	INIT_DELAYED_WORK(&pool->watermark_work, watermark_worker);
 
 	timer_setup(&pool->timer, timer_callback, 0);
 
@@ -672,6 +694,12 @@ int guest_pool_init(void)
 	if (ret) {
 		pr_err("Failed to create sysfs group: %d\n", ret);
 		goto free_kobj;
+	}
+
+	ret = create_worker_thread(pool);
+	if (ret) {
+		pr_err("Failed to create watermark_worker!\n");
+		goto remove_sysfs;
 	}
 
 #if GUEST_POOL_STATS
@@ -707,9 +735,9 @@ int guest_pool_init(void)
 #if GUEST_POOL_STATS
 free_stats:
 	kvfree(pool->stats);
+#endif
 remove_sysfs:
 	sysfs_remove_group(pool->kobj, &pagepool_attr_group);
-#endif
 free_kobj:
 	kobject_put(pool->kobj);
 free_pool:
@@ -737,7 +765,7 @@ void guest_pool_destroy(void)
 	synchronize_rcu();
 
 	del_timer_sync(&pool->timer);
-	cancel_delayed_work_sync(&pool->watermark_work);
+	destroy_worker_thread(pool);
 	debugfs_remove_recursive(pool->debugfs_dir);
 	sysfs_remove_group(pool->kobj, &pagepool_attr_group);
 	kobject_put(pool->kobj);
@@ -813,7 +841,7 @@ struct page *alloc_guest_page(size_t size)
 
 	/* wakeup worker to refill */
 	if (unlikely(below_low_watermark(pool)))
-		queue_delayed_work(system_wq, &pool->watermark_work, 0);
+		kthread_queue_delayed_work(&pool->kthread_worker, &pool->watermark_work, 0);
 
 	stats_s_timestamp();
 	page = alloc_guest_page_fast(pool);

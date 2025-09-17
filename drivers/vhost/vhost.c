@@ -619,7 +619,7 @@ static void vhost_workers_free(struct vhost_dev *dev)
 	xa_destroy(&dev->worker_xa);
 }
 
-struct vhost_worker *vhost_worker_create(struct vhost_dev *dev)
+static struct vhost_worker *__vhost_worker_create(struct vhost_dev *dev, const char *task_name)
 {
 	struct vhost_worker *worker;
 	struct vhost_task *vtsk;
@@ -631,7 +631,10 @@ struct vhost_worker *vhost_worker_create(struct vhost_dev *dev)
 	if (!worker)
 		return NULL;
 
-	snprintf(name, sizeof(name), "vhost-%d", current->pid);
+	if (task_name)
+		snprintf(name, sizeof(name), "%s", task_name);
+	else
+		snprintf(name, sizeof(name), "vhost-%d", current->pid);
 
 	vtsk = vhost_task_create(vhost_worker, worker, name);
 	if (!vtsk)
@@ -656,6 +659,16 @@ stop_worker:
 free_worker:
 	kfree(worker);
 	return NULL;
+}
+
+struct vhost_worker *vhost_worker_create_with_name(struct vhost_dev *dev, const char *task_name)
+{
+	return __vhost_worker_create(dev, task_name);
+}
+
+struct vhost_worker *vhost_worker_create(struct vhost_dev *dev)
+{
+	return __vhost_worker_create(dev, NULL);
 }
 
 /* Caller must have device mutex */

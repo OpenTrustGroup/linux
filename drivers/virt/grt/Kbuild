@@ -27,3 +27,4 @@ obj-y += nebula_rtc/
 obj-y += nebula_debug_tool/
 obj-y += af_vsock/
 obj-y += vhost_vsock/
+obj-y += vhost_alloc/

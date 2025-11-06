@@ -3,6 +3,7 @@
  *
  * $FreeBSD$
  */
+ // Copyright (c) 2024 MediaTek Inc.
 
 #ifndef _VIRTIO_H_
 #define _VIRTIO_H_
@@ -60,6 +61,8 @@ typedef uint32_t __virtio32;
 #define VIRTIO_ID_BT             40UL
 #define VIRTIO_ID_GPIO           41UL
 #define VIRTIO_ID_RDMA           42UL
+#define VIRTIO_ID_LEDS           49UL
+#define VIRTIO_ID_UFS_RPMB       56UL
 
 /* Status byte for guest to report progress. */
 #define VIRTIO_CONFIG_STATUS_RESET       0x00

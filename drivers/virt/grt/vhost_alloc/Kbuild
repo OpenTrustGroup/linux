@@ -13,6 +13,7 @@ subdir-ccflags-y += \
 	-I$(KERNEL_SRC)/drivers/vhost/
 
 ccflags-y += -Wno-error=unused-function
+ccflags-y += -I$(srctree)/drivers/virt/grt/rproc_net/
 
 obj-y := vhost-alloc.o
 vhost-alloc-objs += vhost_alloc.o guest_page_pool.o

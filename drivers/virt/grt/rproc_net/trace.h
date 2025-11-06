@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ *  Copyright (c) 2024 MediaTek Inc.
+ */
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM nebula_rproc
 

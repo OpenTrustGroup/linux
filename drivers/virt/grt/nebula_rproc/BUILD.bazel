@@ -6,11 +6,12 @@ package(
 )
 virt_outs = [
     "nebula_rproc.ko",
-    "rproc_vsock.ko",
+    "nebula_rpmsg_sample.ko",
+    "nebula_rpmsg_test.ko"
 ]
 
 define_mgk_ko(
-    name = "nebula_rproc",
+    name = "rproc_remote",
     srcs = glob([
         "*.c",
         "*.h",

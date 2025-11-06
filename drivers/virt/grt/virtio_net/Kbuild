@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Support GKI mixed build
+
+ccflags-y += -Wno-error=unused-function
+ccflags-y += -I$(srctree)/drivers/virt/grt/rproc_net/
+
+obj-y += virtio_net.o

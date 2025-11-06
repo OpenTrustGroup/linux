@@ -1,0 +1,3 @@
+ccflags-y += -I$(srctree)/drivers/virt/grt/nebula_rproc/
+
+obj-y += rproc_net.o

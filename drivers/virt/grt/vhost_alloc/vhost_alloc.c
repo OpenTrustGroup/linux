@@ -28,7 +28,7 @@
 #include "vhost.h"
 #include "guest_page_pool.h"
 
-#include "../nebula_rproc/trace.h"
+#include "trace.h"
 
 /* Max number of bytes transferred before requeueing the job.
  * Using this limit prevents one virtqueue from starving others. */

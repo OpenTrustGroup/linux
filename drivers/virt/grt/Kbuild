@@ -31,3 +31,4 @@ obj-y += af_vsock/
 obj-y += vhost_vsock/
 obj-y += vhost_alloc/
 obj-y += virtio_rpmsg_bus/
+obj-y += vmlog/

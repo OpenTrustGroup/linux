@@ -72,7 +72,7 @@ static void signal_irq(uint16_t irq)
 {
 	struct arm_smccc_res res;
 	unsigned long r7 = SMC_HYP_SECURE_ID << 16;
-	arm_smccc_smc(SMC_FC_NBL_VHM_REQ, 0, irq, 0, 0, 0, 0, r7, &res);
+	arm_smccc_smc(SMC_FC_NBL_VHM_REQ, FC_ID_INJECT_HW_IRQ, irq, 0, 0, 0, 0, r7, &res);
 }
 
 struct irq_info {

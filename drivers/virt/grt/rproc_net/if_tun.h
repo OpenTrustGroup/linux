@@ -2,6 +2,7 @@
 /*
  *  Universal TUN/TAP device driver.
  *  Copyright (C) 1999-2000 Maxim Krasnyansky <max_mk@yahoo.com>
+ *  Copyright (c) 2024 MediaTek Inc.
  */
 #ifndef __IF_TUN_H
 #define __IF_TUN_H

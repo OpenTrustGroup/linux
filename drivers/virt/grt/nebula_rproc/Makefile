@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
 ifneq ($(wildcard $(KERNEL_SRC)/$(DEVICE_MODULES_REL_DIR)/Makefile.include),)
 include $(KERNEL_SRC)/$(DEVICE_MODULES_REL_DIR)/Makefile.include
 endif

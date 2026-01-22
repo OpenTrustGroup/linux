@@ -26,7 +26,8 @@ obj-$(CONFIG_TI_SCI_PROTOCOL)	+= ti_sci.o
 obj-$(CONFIG_TRUSTED_FOUNDATIONS) += trusted_foundations.o
 obj-$(CONFIG_TURRIS_MOX_RWTM)	+= turris-mox-rwtm.o
 
-obj-y				+= arm_ffa/
+obj-$(CONFIG_ARM_FFA_TRANSPORT)					+= arm_ffa/
+obj-$(CONFIG_ARM_FFA_TRANSPORT_1_1)				+= ffa_v11/
 obj-y				+= arm_scmi/
 obj-y				+= broadcom/
 obj-y				+= cirrus/

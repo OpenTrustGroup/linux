@@ -136,12 +136,14 @@ static int wait_driver_ready(struct virtio_device *vdev)
 }
 
 int sample_device_create(struct virtio_device *vdev,
-			 struct metal_io_region *shm_io)
+			 struct metal_io_region *shm_io, int vmid, void *user_priv)
 {
 	const char *vq_names[NUM_VRINGS];
 	vq_callback callback[NUM_VRINGS];
 	int vq_err, ret;
 	unsigned int i;
+	(void)vmid;
+	(void)user_priv;
 
 	struct sample_vdev_priv *priv =
 		kzalloc(sizeof(struct sample_vdev_priv), GFP_KERNEL);
@@ -202,8 +204,9 @@ static struct nebula_rproc_vdev_ops sample_vdev_ops = {
 
 static int __init nebula_virtio_sample_init(void)
 {
+	return 0;
 	nebula_rproc_register_device(
-		&sample_vdev_desc, sizeof(sample_vdev_desc), &sample_vdev_ops);
+		&sample_vdev_desc, sizeof(sample_vdev_desc), &sample_vdev_ops, NULL);
 	return 0;
 }
 

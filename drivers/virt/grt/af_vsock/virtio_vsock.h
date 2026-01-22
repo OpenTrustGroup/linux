@@ -2,42 +2,11 @@
 #ifndef _LINUX_VIRTIO_VSOCK_H
 #define _LINUX_VIRTIO_VSOCK_H
 
-// #include <uapi/linux/virtio_vsock.h>
+#include <uapi/linux/virtio_vsock.h>
 #include <linux/socket.h>
 #include <net/sock.h>
-#include <net/af_vsock.h>
 
-/* VIRTIO_VSOCK_OP_RW flags values */
-enum virtio_vsock_rw {
-	VIRTIO_VSOCK_SEQ_EOM = 1,
-	VIRTIO_VSOCK_SEQ_EOR = 2,
-};
-
-struct virtio_vsock_hdr {
-	__le64	src_cid;
-	__le64	dst_cid;
-	__le32	src_port;
-	__le32	dst_port;
-	__le32	len;
-	__le16	type;		/* enum virtio_vsock_type */
-	__le16	op;		/* enum virtio_vsock_op */
-	__le32	flags;
-	__le32	buf_alloc;
-	__le32	fwd_cnt;
-} __attribute__((packed));
-
-struct vsock_sock;
-struct virtio_vsock_pkt {
-	struct virtio_vsock_hdr	hdr;
-	struct work_struct work;
-	struct list_head list;
-	/* socket refcnt not held, only use for cancellation */
-	struct vsock_sock *vsk;
-	void *buf;
-	u32 len;
-	u32 off;
-	bool reply;
-};
+#include "af_vsock.h"
 
 #define VIRTIO_VSOCK_SKB_HEADROOM (sizeof(struct virtio_vsock_hdr))
 
@@ -150,7 +119,8 @@ extern uint virtio_transport_max_vsock_pkt_buf_size;
 enum {
 	VSOCK_VQ_RX     = 0, /* for host to guest data */
 	VSOCK_VQ_TX     = 1, /* for guest to host data */
-	VSOCK_VQ_MAX    = 2,
+	VSOCK_VQ_EVENT  = 2,
+	VSOCK_VQ_MAX    = 3,
 };
 
 /* Per-socket state (accessed via vsk->trans) */

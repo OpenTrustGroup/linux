@@ -3,6 +3,7 @@
  * Author: Michael S. Tsirkin <mst@redhat.com>
  *
  * virtio-net server in host kernel.
+ * Copyright (c) 2024 MediaTek Inc.
  */
 
 #include <linux/compat.h>
@@ -27,6 +28,10 @@
 #include <linux/skb_array.h>
 #include <linux/skbuff.h>
 
+#if defined(CONFIG_DEBUG_FS)
+#include <linux/debugfs.h>
+#endif
+
 #include <net/sock.h>
 #include <net/xdp.h>
 
@@ -34,7 +39,7 @@
 #include "remoteproc_virtio.h"
 #include "virtqueue.h"
 #include "virtio.h"
-#include "virtio_vnet.h"
+#include "rproc_net.h"
 #include "if_tun.h"
 
 #define CREATE_TRACE_POINTS
@@ -44,7 +49,7 @@
 
 /* Resource table entries */
 #define	VRING_ALIGN 0x1000
-#define	VRING_SIZE 256
+#define	VRING_SIZE 4096
 
 static int experimental_zcopytx = 0;
 module_param(experimental_zcopytx, int, 0444);
@@ -65,6 +70,7 @@ MODULE_PARM_DESC(experimental_zcopytx, "Enable Zero Copy TX;"
 #define VHOST_MAX_PEND 128
 #define VHOST_GOODCOPY_LEN 256
 
+#define VIRTIO_VNET_MAX_CNT 2
 /*
  * For transmit, used buffer len is unused; we override it to track buffer
  * status internally; used for zerocopy tx only.
@@ -83,7 +89,7 @@ MODULE_PARM_DESC(experimental_zcopytx, "Enable Zero Copy TX;"
 #define VHOST_NET_F_VIRTIO_NET_HDR 27
 
 enum {
-	VHOST_NET_FEATURES = 0
+	VHOST_NET_FEATURES = (1UL << VIRTIO_NET_F_MAC),
 };
 
 enum {
@@ -98,7 +104,7 @@ struct vhost_net_device_descriptor {
 	struct virtio_net_config config;
 } __packed;
 
-static const struct vhost_net_device_descriptor vhost_net_vdev_desc = {
+static struct vhost_net_device_descriptor vhost_net_vdev_desc = {
 	.vdev = {
 		.type = RSC_VDEV,
 		.id = VIRTIO_ID_NETWORK,
@@ -119,6 +125,15 @@ static const struct vhost_net_device_descriptor vhost_net_vdev_desc = {
 		},
 	},
 };
+
+static void update_mac_addr(struct vhost_net_device_descriptor *desc, u8 dev_id) {
+	desc->config.mac[0] = 0x0a;
+	desc->config.mac[1] = 0x76;
+	desc->config.mac[2] = 0xac;
+	desc->config.mac[3] = 0x10;
+	desc->config.mac[4] = dev_id;
+	desc->config.mac[5] = 0x02;
+}
 
 struct vhost_net_ubuf_ref {
 	/* refcount follows semantics similar to kref:
@@ -195,6 +210,10 @@ struct vhost_net {
 	atomic_t pending_work_count;
 	int weight;
 	int byte_weight;
+
+#if defined(CONFIG_DEBUG_FS)
+	struct dentry *debugfs;
+#endif
 };
 
 static void vhost_work_queue(struct vhost_net *net, struct work_struct *work)
@@ -320,7 +339,7 @@ static inline size_t kvec_length(const struct kvec* iov, unsigned long nr_segs)
 	return ret;
 }
 
-static struct socket *s_backend_socks[VHOST_NET_VQ_MAX];
+static struct socket *s_backend_socks[VIRTIO_VNET_MAX_CNT][VHOST_NET_VQ_MAX];
 
 static void *vhost_net_buf_get_ptr(struct vhost_net_buf *rxq)
 {
@@ -645,7 +664,7 @@ static void vhost_tx_batch(struct vhost_net *net,
 	msghdr->msg_controllen = sizeof(ctl);
 	err = sock->ops->sendmsg(sock, msghdr, 0);
 	if (unlikely(err < 0)) {
-		pr_err("Fail to batch sending packets\n");
+		pr_info("Fail to batch sending packets\n");
 
 		/* free pages owned by XDP; since this is an unlikely error path,
 		 * keep it simple and avoid more complex bulk update for the
@@ -805,7 +824,7 @@ static int get_tx_bufs(struct vhost_net *net,
 		return ret;
 
 	if (*in) {
-		pr_err("Unexpected descriptor format for TX: out %d, int %d\n",
+		pr_info("Unexpected descriptor format for TX: out %d, int %d\n",
 			*out, *in);
 		return -EFAULT;
 	}
@@ -813,7 +832,7 @@ static int get_tx_bufs(struct vhost_net *net,
 	/* Sanity check */
 	*len = init_iov_iter(vq, vq->iov, &msg->msg_iter, nvq->vhost_hlen, *out);
 	if (*len == 0) {
-		pr_err("Unexpected header len for TX: %zd expected %zd\n",
+		pr_info("Unexpected header len for TX: %zd expected %zd\n",
 			*len, nvq->vhost_hlen);
 		return -EFAULT;
 	}
@@ -1245,7 +1264,7 @@ static int get_rx_bufs(struct virtqueue *vq,
 		if (unlikely(r < 0))
 			goto err;
 		if (unlikely(out || in <= 0)) {
-			pr_err("unexpected descriptor format for RX: "
+			pr_info("unexpected descriptor format for RX: "
 				"out %d, in %d\n", out, in);
 			r = -EINVAL;
 			goto err;
@@ -1376,7 +1395,7 @@ static void handle_rx(struct vhost_net *net)
 		if (unlikely(vhost_hlen)) {
 			if (copy_to_iter(&hdr, sizeof(hdr),
 					 &fixup) != sizeof(hdr)) {
-				pr_err("Unable to write vnet_hdr "
+				pr_info("Unable to write vnet_hdr "
 				       "at addr %p\n", vq->iov->iov_base);
 				goto out;
 			}
@@ -1392,7 +1411,7 @@ static void handle_rx(struct vhost_net *net)
 		if (likely(mergeable) &&
 		    copy_to_iter(&num_buffers, sizeof num_buffers,
 				 &fixup) != sizeof num_buffers) {
-			pr_err("Failed num_buffers write");
+			pr_info("Failed num_buffers write");
 			virtqueue_discard_vq_desc(vq, headcount);
 			goto out;
 		}
@@ -1573,7 +1592,7 @@ static struct socket *get_socket(int fd)
 	return ERR_PTR(-ENOTSOCK);
 }
 
-static long vhost_net_set_backend(struct vhost_net *n, int index, struct socket *sock)
+static long vhost_net_set_backend(struct vhost_net *n, unsigned int index, struct socket *sock)
 {
 	struct socket *oldsock;
 	struct virtqueue *vq;
@@ -1685,6 +1704,7 @@ static int vhost_net_set_features(struct vhost_net *n, u64 features)
 }
 
 struct vhost_vring_file {
+	unsigned int dev_index;
 	unsigned int index;
 	int fd; /* Pass -1 to unbind from file. */
 
@@ -1705,14 +1725,17 @@ static long vhost_net_ioctl(struct file *f, unsigned int ioctl,
 		if (copy_from_user(&backend, argp, sizeof backend))
 			return -EFAULT;
 
-		if (backend.index > VHOST_NET_VQ_MAX)
+		if (backend.index >= VHOST_NET_VQ_MAX)
 			return -EINVAL;
 		sock = get_socket(backend.fd);
 		if (IS_ERR(sock)) {
-			pr_err("failed to get socket, ret=%ld\n", PTR_ERR(sock));
+			pr_info("failed to get socket, ret=%ld\n", PTR_ERR(sock));
 			return PTR_ERR(sock);
 		}
-		s_backend_socks[backend.index] = sock;
+		if (backend.dev_index >= VIRTIO_VNET_MAX_CNT)
+			return -EINVAL;
+
+		s_backend_socks[backend.dev_index][backend.index] = sock;
 		return 0;
 	default:
 		return -ENOIOCTLCMD;
@@ -1735,15 +1758,80 @@ static struct miscdevice vhost_net_misc = {
 
 #define WAIT_STATE_TIMEOUT_MSEC 60000
 
-static bool wait_for_backend_socks(void)
+#if defined(CONFIG_DEBUG_FS)
+static ssize_t batched_xdp_show(struct file *file, char __user *user_buf,
+				size_t count, loff_t *ppos)
+{
+	struct vhost_net *net = file->private_data;
+	struct vhost_net_virtqueue *nvq = &net->vqs[VHOST_NET_VQ_TX];
+	char buf[32];
+	int len = 0;
+
+	len = scnprintf(buf, sizeof(buf), "%d\n", nvq->batched_xdp);
+
+	return simple_read_from_buffer(user_buf, count, ppos, buf, len);
+}
+
+static const struct file_operations batched_xdp_fops = {
+	.open = simple_open,
+	.read = batched_xdp_show,
+	.owner = THIS_MODULE,
+};
+
+static ssize_t done_idx_show(struct file *file, char __user *user_buf,
+				size_t count, loff_t *ppos)
+{
+	struct vhost_net *net = file->private_data;
+	struct vhost_net_virtqueue *nvq = &net->vqs[VHOST_NET_VQ_TX];
+	char buf[32];
+	int len = 0;
+
+	len = scnprintf(buf, sizeof(buf), "%d\n", nvq->done_idx);
+
+	return simple_read_from_buffer(user_buf, count, ppos, buf, len);
+}
+
+static const struct file_operations done_idx_fops = {
+	.open = simple_open,
+	.read = done_idx_show,
+	.owner = THIS_MODULE,
+};
+
+static ssize_t tx_vq_show(struct file *file, char __user *user_buf,
+				size_t count, loff_t *ppos)
+{
+	struct vhost_net *net = file->private_data;
+	struct vhost_net_virtqueue *nvq = &net->vqs[VHOST_NET_VQ_TX];
+	struct virtqueue *vq = nvq->vq;
+	if (vq->notify)
+		vq->notify(vq);
+
+	return 0;
+}
+
+static const struct file_operations tx_vq_fops = {
+	.open = simple_open,
+	.read = tx_vq_show,
+	.owner = THIS_MODULE,
+};
+
+static struct dentry *debugfs_root;
+#endif
+
+static bool wait_for_backend_socks(int dev_index)
 {
 	unsigned long timeout =
 	    jiffies + msecs_to_jiffies(WAIT_STATE_TIMEOUT_MSEC);
 
+	if (dev_index >= VIRTIO_VNET_MAX_CNT || dev_index < 0) {
+		pr_info("Invalid argument, dev_index=%d\n", dev_index);
+		return false;
+	}
+
 	do
 	{
-		if (s_backend_socks[VHOST_NET_VQ_RX] != NULL &&
-		    s_backend_socks[VHOST_NET_VQ_TX] != NULL)
+		if (s_backend_socks[dev_index][VHOST_NET_VQ_RX] != NULL &&
+		    s_backend_socks[dev_index][VHOST_NET_VQ_TX] != NULL)
 			return false;
 
 		mdelay(1);
@@ -1752,8 +1840,26 @@ static bool wait_for_backend_socks(void)
 	return true;
 }
 
+struct rproc_net_device_info {
+	int host_vmid;
+	int dev_index;
+};
+
+static struct rproc_net_device_info devices_info[] = {
+	{
+		.host_vmid = 0,
+		.dev_index = 0,
+	},
+	{
+		.host_vmid = 1,
+		.dev_index = 1,
+	},
+};
+
 static int vhost_net_device_create(struct virtio_device *vdev,
-			    	   struct metal_io_region *shm_io) {
+				   struct metal_io_region *shm_io, int vmid,
+				   void *priv)
+{
 	struct vhost_net *n;
 	void **queue;
 	struct xdp_buff *xdp;
@@ -1761,10 +1867,20 @@ static int vhost_net_device_create(struct virtio_device *vdev,
 	const char *vq_names[VHOST_NET_VQ_MAX];
 	vq_callback callback[VHOST_NET_VQ_MAX];
 	bool timeout;
+	struct rproc_net_device_info *info = priv;
+#if defined(CONFIG_DEBUG_FS)
+	char dev_name[64];
+#endif
 
-	timeout = wait_for_backend_socks();
+	if (info->dev_index >= VIRTIO_VNET_MAX_CNT || info->dev_index < 0) {
+		pr_err("error: failed to create virtio vnet, index:%d >= %d\n",
+			info->dev_index, VIRTIO_VNET_MAX_CNT);
+		return -EIO;
+	}
+
+	timeout = wait_for_backend_socks(info->dev_index);
 	if (timeout) {
-		pr_err("timeout waiting for backend socks\n");
+		pr_info("timeout waiting for backend socks\n");
 		return -EINVAL;
 	}
 
@@ -1789,7 +1905,7 @@ static int vhost_net_device_create(struct virtio_device *vdev,
 	n->vqs[VHOST_NET_VQ_TX].xdp = xdp;
 
 	n->workq = alloc_workqueue("rproc_net",
-				    WQ_MEM_RECLAIM | WQ_HIGHPRI | WQ_UNBOUND, 1);
+				    WQ_MEM_RECLAIM | WQ_HIGHPRI, 1);
 	if (!n->workq) {
 		ret = -ENOMEM;
 		goto err_free_vhost_net;
@@ -1802,7 +1918,7 @@ static int vhost_net_device_create(struct virtio_device *vdev,
 	vq_err = virtio_create_virtqueues(vdev, 0, VHOST_NET_VQ_MAX, vq_names,
 					  callback, NULL);
 	if (vq_err != VQUEUE_SUCCESS) {
-		pr_err("failed to create virtqueue, err=%d\n", vq_err);
+		pr_info("failed to create virtqueue, err=%d\n", vq_err);
 		ret = -EIO;
 		goto err_destroy_workq;
 	}
@@ -1841,10 +1957,21 @@ static int vhost_net_device_create(struct virtio_device *vdev,
 
 	vdev->priv = n;
 
-	vhost_net_set_backend(n, VHOST_NET_VQ_TX, s_backend_socks[VHOST_NET_VQ_TX]);
-	vhost_net_set_backend(n, VHOST_NET_VQ_RX, s_backend_socks[VHOST_NET_VQ_RX]);
+	vhost_net_set_backend(n, VHOST_NET_VQ_TX, s_backend_socks[info->dev_index][VHOST_NET_VQ_TX]);
+	vhost_net_set_backend(n, VHOST_NET_VQ_RX, s_backend_socks[info->dev_index][VHOST_NET_VQ_RX]);
 	vhost_net_set_features(n, vdev->features);
 
+#if defined(CONFIG_DEBUG_FS)
+	scnprintf(dev_name, sizeof(dev_name), "dev%d", info->dev_index);
+	n->debugfs = debugfs_create_dir(dev_name, debugfs_root);
+	if (n->debugfs) {
+		debugfs_create_file("batched_xdp", 0600, n->debugfs, n,
+				    &batched_xdp_fops);
+		debugfs_create_file("done_idx", 0600, n->debugfs, n,
+				    &done_idx_fops);
+		debugfs_create_file("tx_vq", 0600, n->debugfs, n, &tx_vq_fops);
+	}
+#endif
 	return 0;
 
 err_release_virtqueues:
@@ -1894,6 +2021,15 @@ static struct nebula_rproc_vdev_ops vhost_net_vdev_ops = {
 static int __init vhost_net_init(void)
 {
 	int ret;
+	int i;
+
+#if defined(CONFIG_DEBUG_FS)
+	const char *dev_name = "rproc_net";
+	debugfs_root = debugfs_create_dir(dev_name, NULL);
+	if (IS_ERR(debugfs_root)) {
+		return PTR_ERR(debugfs_root);
+	}
+#endif
 
 	if (experimental_zcopytx)
 		vhost_net_enable_zcopy(VHOST_NET_VQ_TX);
@@ -1902,9 +2038,16 @@ static int __init vhost_net_init(void)
 	if (ret)
 		return ret;
 
-	nebula_rproc_register_device(&vhost_net_vdev_desc,
-				     sizeof(vhost_net_vdev_desc),
-				     &vhost_net_vdev_ops);
+	for (i = 0; i < ARRAY_SIZE(devices_info); i++) {
+		struct rproc_net_device_info *info = &devices_info[i];
+
+		update_mac_addr(&vhost_net_vdev_desc, i);
+
+		nebula_rproc_register_device_for_host(
+			&vhost_net_vdev_desc, sizeof(vhost_net_vdev_desc),
+			&vhost_net_vdev_ops, info->host_vmid, info);
+	}
+
 	return 0;
 }
 module_init(vhost_net_init);

@@ -4,6 +4,7 @@
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
+// Copyright (c) 2024 MediaTek Inc.
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
@@ -255,7 +256,7 @@ int virtqueue_get_vq_desc(struct virtqueue *vq, struct kvec iov[],
 		BUG_ON(!vq->indirect);
 		descp = &vq->vq_ring.desc[head];
 		if (descp->len > UIO_MAXIOV * sizeof(struct vring_desc)) {
-			pr_err("count of descriptor exceed max limit!\n");
+			pr_info("count of descriptor exceed max limit!\n");
 			return ERROR_VRING_MAX_DESC;
 		}
 		va = virtqueue_phys_to_virt(vq, descp->addr);
@@ -289,7 +290,7 @@ int virtqueue_get_vq_desc(struct virtqueue *vq, struct kvec iov[],
 			/* If it's an output descriptor, they're all supposed
 			 * to come before any input descriptors. */
 			if (unlikely(*in_num)) {
-				pr_err("Descriptor has out after in: "
+				pr_info("Descriptor has out after in: "
 				       "idx %d\n",
 				       i);
 				return ERROR_VQUEUE_INVLD_PARAM;
@@ -352,7 +353,7 @@ void virtqueue_free(struct virtqueue *vq)
 {
 	if (vq) {
 		if (vq->vq_free_cnt != vq->vq_nentries) {
-			pr_warn("%s: freeing non-empty virtqueue\n",
+			pr_info("%s: freeing non-empty virtqueue\n",
 				vq->vq_name);
 		}
 

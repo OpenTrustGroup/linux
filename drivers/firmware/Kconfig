@@ -304,6 +304,7 @@ config TURRIS_MOX_RWTM
 	  for hardware random number generation.
 
 source "drivers/firmware/arm_ffa/Kconfig"
+source "drivers/firmware/ffa_v11/Kconfig"
 source "drivers/firmware/broadcom/Kconfig"
 source "drivers/firmware/cirrus/Kconfig"
 source "drivers/firmware/google/Kconfig"

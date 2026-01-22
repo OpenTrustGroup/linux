@@ -316,13 +316,19 @@ static inline long hcall_setup_sbuf(unsigned long sbuf_head)
 	return acrn_hypercall1(HC_SETUP_SBUF, sbuf_head);
 }
 
-static inline long hcall_trigger_interrupt(uint32_t interrupt)
+static inline long hcall_inject_hw_irq(uint32_t interrupt)
 {
-	struct arm_smccc_res res;
-	unsigned long r7 = SMC_HYP_SECURE_ID << 16;
+	return acrn_fastcall1(FC_ID_INJECT_HW_IRQ, interrupt);
+}
 
-	arm_smccc_smc(SMC_FC_NBL_VHM_REQ, 0, interrupt, 0, 0, 0, 0, r7, &res);
-	return res.a0;
+static inline long hcall_inject_virt_irq(uint32_t vmid, uint32_t interrupt)
+{
+	return acrn_fastcall2(FC_ID_INJECT_VIRT_IRQ, vmid, interrupt);
+}
+
+static inline long hcall_notify_vmlog(void)
+{
+	return acrn_fastcall0(FC_ID_NOTIFY_VMLOG);
 }
 
 #endif /* __ACRN_HSM_HYPERCALL_H */

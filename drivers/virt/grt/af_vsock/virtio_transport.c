@@ -9,8 +9,6 @@
  * Some of the code is take from Gerd Hoffmann <kraxel@redhat.com>'s
  * early virtio-vsock proof-of-concept bits.
  */
-#include "rename_symbols.h"
-
 #include <linux/spinlock.h>
 #include <linux/module.h>
 #include <linux/list.h>
@@ -111,7 +109,6 @@ virtio_transport_send_pkt_work(struct work_struct *work)
 		if (!skb)
 			break;
 
-		virtio_transport_deliver_tap_pkt(skb);
 		reply = virtio_vsock_skb_reply(skb);
 
 		sg_init_one(&hdr, virtio_vsock_hdr(skb), sizeof(*virtio_vsock_hdr(skb)));
@@ -129,6 +126,8 @@ virtio_transport_send_pkt_work(struct work_struct *work)
 			virtio_vsock_skb_queue_head(&vsock->send_pkt_queue, skb);
 			break;
 		}
+
+		virtio_transport_deliver_tap_pkt(skb);
 
 		if (reply) {
 			struct virtqueue *rx_vq = vsock->vqs[VSOCK_VQ_RX];

@@ -1,5 +1,5 @@
 
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-only
 //
 // Copyright (c) 2024 GoldenRiver Inc.
 
@@ -23,6 +23,19 @@
 #include <linux/genalloc.h>
 #include <linux/arm-smccc.h>
 #include <linux/nebula/hvcall.h>
+#include <uapi/linux/sched/types.h>
+#include <linux/sched.h>
+#include <linux/kthread.h>
+#include <linux/completion.h>
+#include <linux/random.h>
+#include <linux/delay.h>
+#include <linux/mm.h>
+#include <linux/gfp.h>
+#include <linux/version.h>
+
+#if defined(CONFIG_DEBUG_KMEMLEAK)
+#include <linux/kmemleak.h>
+#endif
 
 irqreturn_t rproc_vq_interrupt(struct rproc *rproc, int vq_id);
 
@@ -44,9 +57,10 @@ static void signal_irq(uint16_t irq)
 {
 	struct arm_smccc_res res;
 	unsigned long r7 = SMC_HYP_SECURE_ID << 16;
-	arm_smccc_smc(SMC_FC_NBL_VHM_REQ, 0, irq, 0, 0, 0, 0, r7, &res);
+	arm_smccc_smc(SMC_FC_NBL_VHM_REQ, FC_ID_INJECT_HW_IRQ, irq, 0, 0, 0, 0, r7, &res);
 }
 
+#define NUM_STRESS_THREADS 15
 #define RSC_TAB_SIZE 0x1000
 #define NBL_RPROC_MAGIC 0x6E626C5F72656d6fULL
 
@@ -55,7 +69,29 @@ struct irq_info {
 	int remote_hwirq;
 	struct rproc *rproc;
 	int notifyid;
+	struct completion done;
+	spinlock_t spinlock;
+	struct mutex mutex;
+	unsigned long irqflag;
+	bool use_threaded_irq;
+	bool dev_ready;
 };
+
+static inline void lock_irq_info(struct irq_info *info) {
+	if (!info->use_threaded_irq) {
+		spin_lock_irqsave(&info->spinlock, info->irqflag);
+	} else {
+		mutex_lock(&info->mutex);
+	}
+}
+
+static inline void unlock_irq_info(struct irq_info *info) {
+	if (!info->use_threaded_irq) {
+		spin_unlock_irqrestore(&info->spinlock, info->irqflag);
+	} else {
+		mutex_unlock(&info->mutex);
+	}
+}
 
 struct rproc_host_priv {
 	uint64_t magic;
@@ -70,6 +106,7 @@ struct rproc_host_priv {
 
 	int num_queues;
 	struct irq_info *irq_info;
+	struct task_struct **tasks;
 	bool notify_with_phys_irq;
 #if defined(CONFIG_ZONE_DEVICE)
 	struct dev_pagemap pgmap;
@@ -78,10 +115,13 @@ struct rproc_host_priv {
 	struct device *dev;
 	struct list_head node;
 	bool attached;
+	bool irq_requested;
+
+	struct task_struct *stress_threads[NUM_STRESS_THREADS];
 };
 
-static LIST_HEAD(rproc_devices);
-static DEFINE_MUTEX(rproc_devices_lock);
+LIST_HEAD(rproc_devices);
+DEFINE_MUTEX(rproc_devices_lock);
 
 struct device *nebula_rproc_get_alloc_device(struct virtio_device *vdev) {
 	struct rproc_host_priv *priv;
@@ -102,12 +142,56 @@ struct device *nebula_rproc_get_alloc_device(struct virtio_device *vdev) {
 }
 EXPORT_SYMBOL(nebula_rproc_get_alloc_device);
 
+static int rproc_notify_thread(void *data) {
+	struct irq_info *info = data;
+	while (1) {
+		wait_for_completion(&info->done);
+		if (kthread_should_stop())
+			break;
+
+		lock_irq_info(info);
+		if (!info->dev_ready) {
+			dev_info(&info->rproc->dev,
+				 "got virq%d while device is not ready\n",
+				 info->local_virq);
+			unlock_irq_info(info);
+			continue;
+		}
+
+		if (rproc_vq_interrupt(info->rproc, info->notifyid) == IRQ_NONE)
+			dev_dbg(&info->rproc->dev, "no message found in vq%d\n",
+				info->notifyid);
+		unlock_irq_info(info);
+	}
+	return 0;
+}
+
+static irqreturn_t rproc_notify_thread_waker(int irq, void *data)
+{
+	struct irq_info *info = data;
+
+	complete(&info->done);
+	return IRQ_HANDLED;
+}
+
 static irqreturn_t rproc_notify_irq_handler(int irq, void *data)
 {
 	struct irq_info *info = data;
+
+	lock_irq_info(info);
+	if (!info->dev_ready) {
+		dev_info(&info->rproc->dev,
+			 "got virq%d while device is not ready\n",
+			 info->local_virq);
+		unlock_irq_info(info);
+		return IRQ_HANDLED;
+	}
+
 	if (rproc_vq_interrupt(info->rproc, info->notifyid) == IRQ_NONE)
 		dev_dbg(&info->rproc->dev, "no message found in vq%d\n",
 			info->notifyid);
+
+	unlock_irq_info(info);
 	return IRQ_HANDLED;
 }
 
@@ -119,7 +203,26 @@ static irqreturn_t rproc_ctrl_irq_handler(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static int nebula_rproc_attach(struct rproc *rproc)
+static void change_irq_state(struct rproc *rproc, bool ready) {
+	struct rproc_vdev *rvdev;
+	struct rproc_host_priv *priv = rproc->priv;
+	void *rsc_table = priv->shm_base;
+
+	list_for_each_entry(rvdev, &rproc->rvdevs, node) {
+		struct fw_rsc_vdev *rsc_vdev = rsc_table + rvdev->rsc_offset;
+		int i;
+
+		for (i = 0; i < rsc_vdev->num_of_vrings; i++) {
+			int notifyid = rvdev->vring[i].notifyid;
+			struct irq_info *irq_info = &priv->irq_info[notifyid];
+			lock_irq_info(irq_info);
+			irq_info->dev_ready = ready;
+			unlock_irq_info(irq_info);
+		}
+	}
+}
+
+static void nebula_rproc_init_irq(struct rproc *rproc)
 {
 	struct rproc_vdev *rvdev;
 	struct rproc_host_priv *priv = rproc->priv;
@@ -128,9 +231,9 @@ static int nebula_rproc_attach(struct rproc *rproc)
 		container_of(priv->dev, struct platform_device, dev);
 	cpumask_t mask;
 
-	// bind rproc irq to vcpu5
+	// bind rproc irq to vcpu3
 	cpumask_clear(&mask);
-	cpumask_set_cpu(5, &mask);
+	cpumask_set_cpu(3, &mask);
 
 	list_for_each_entry(rvdev, &rproc->rvdevs, node) {
 		struct fw_rsc_vdev *rsc_vdev = rsc_table + rvdev->rsc_offset;
@@ -140,9 +243,14 @@ static int nebula_rproc_attach(struct rproc *rproc)
 		for (i = 0; i < rsc_vdev->num_of_vrings; i++) {
 			int notifyid = rvdev->vring[i].notifyid;
 			struct irq_info *irq_info = &priv->irq_info[notifyid];
+			struct sched_param param = { .sched_priority = 99 };
 			int virq = platform_get_irq(pdev, notifyid + 1);
 			BUG_ON(virq < 0);
 
+			spin_lock_init(&irq_info->spinlock);
+			mutex_init(&irq_info->mutex);
+			irq_info->use_threaded_irq = use_threaded_irq;
+			irq_info->dev_ready = true;
 			irq_info->local_virq = virq;
 			irq_info->notifyid = notifyid;
 			irq_info->rproc = rproc;
@@ -155,48 +263,53 @@ static int nebula_rproc_attach(struct rproc *rproc)
 				irq_info->remote_hwirq = hwirq;
 			}
 
-			if (use_threaded_irq)
+			if (use_threaded_irq) {
+				init_completion(&irq_info->done);
+				priv->tasks[notifyid] = kthread_create(
+					rproc_notify_thread, irq_info,
+					"rproc_rt-%d", notifyid);
+				sched_setscheduler_nocheck(
+					priv->tasks[notifyid], SCHED_FIFO,
+					&param);
+				set_cpus_allowed_ptr(priv->tasks[notifyid],
+						     &mask);
+				wake_up_process(priv->tasks[notifyid]);
+
 				ret = devm_request_threaded_irq(
-					&pdev->dev, virq, NULL,
-					rproc_notify_irq_handler, IRQF_ONESHOT,
-					dev_name(&pdev->dev), irq_info);
-			else
+					&pdev->dev, virq,
+					rproc_notify_thread_waker, NULL,
+					IRQF_ONESHOT, dev_name(&pdev->dev),
+					irq_info);
+			} else {
 				ret = devm_request_irq(&pdev->dev, virq,
 						       rproc_notify_irq_handler,
 						       IRQF_SHARED,
 						       dev_name(&pdev->dev),
 						       irq_info);
+			}
 			BUG_ON(ret < 0);
 			irq_set_affinity_hint(virq, &mask);
 		}
 	}
+}
 
+static int nebula_rproc_attach(struct rproc *rproc)
+{
+	struct rproc_host_priv *priv = rproc->priv;
+
+	if (priv->irq_requested) {
+		change_irq_state(rproc, true);
+		return 0;
+	}
+
+	nebula_rproc_init_irq(rproc);
+	priv->irq_requested = true;
 	return 0;
 }
 
 static int nebula_rproc_detach(struct rproc *rproc)
 {
-	struct rproc_vdev *rvdev;
-	struct rproc_host_priv *priv = rproc->priv;
-	void *rsc_table = priv->shm_base;
-	struct platform_device *pdev =
-		container_of(priv->dev, struct platform_device, dev);
-
-	list_for_each_entry(rvdev, &rproc->rvdevs, node) {
-		struct fw_rsc_vdev *rsc_vdev = rsc_table + rvdev->rsc_offset;
-		int i;
-
-		for (i = 0; i < rsc_vdev->num_of_vrings; i++) {
-			int notifyid = rvdev->vring[i].notifyid;
-			struct irq_info *irq_info = &priv->irq_info[notifyid];
-			int virq = platform_get_irq(pdev, notifyid + 1);
-			BUG_ON(virq < 0);
-
-			irq_set_affinity_hint(virq, NULL);
-			devm_free_irq(&pdev->dev, virq, irq_info);
-		}
-	}
-
+	change_irq_state(rproc, false);
 	return 0;
 }
 
@@ -284,6 +397,8 @@ static struct rproc_host_priv *to_priv(struct device *dev)
 }
 
 #if defined(CONFIG_ZONE_DEVICE)
+
+#if (KERNEL_VERSION(6, 6, 0) > LINUX_VERSION_CODE)
 static void prep_compound_page(struct page *page, unsigned int order)
 {
 	int i;
@@ -297,6 +412,161 @@ static void prep_compound_page(struct page *page, unsigned int order)
 		set_compound_head(p, page);
 	}
 }
+
+static void destroy_compound_page(struct rproc_host_priv *priv,
+				  struct page *page, unsigned int order)
+{
+	int i;
+	int nr_pages = 1 << order;
+
+	for (i = 1; i < nr_pages; i++)
+	{
+		struct page *p = page + i;
+
+		p->pgmap = &priv->pgmap;
+		set_page_count(p, 0);
+	}
+
+	set_compound_order(page, 0);
+	set_page_count(page, 0);
+	__ClearPageHead(page);
+}
+#else
+/*
+ * This will have no effect, other than possibly generating a warning, if the
+ * caller passes in a non-large folio.
+ */
+static inline void folio_set_order(struct folio *folio, unsigned int order)
+{
+	if (WARN_ON_ONCE(!order || !folio_test_large(folio)))
+		return;
+
+	folio->_flags_1 = (folio->_flags_1 & ~0xffUL) | order;
+#ifdef CONFIG_64BIT
+	folio->_folio_nr_pages = 1U << order;
+#endif
+}
+
+/*
+ * Turn a non-refcounted page (->_refcount == 0) into refcounted with
+ * a count of one.
+ */
+static inline void set_page_refcounted(struct page *page)
+{
+	VM_BUG_ON_PAGE(PageTail(page), page);
+	VM_BUG_ON_PAGE(page_ref_count(page), page);
+	set_page_count(page, 1);
+}
+
+/* used to demote non-gigantic_huge pages as well */
+static void __destroy_compound_gigantic_folio(struct rproc_host_priv *priv,
+					struct folio *folio, unsigned int order, bool demote)
+{
+	int i;
+	int nr_pages = 1 << order;
+	struct page *p;
+
+	atomic_set(&folio->_entire_mapcount, 0);
+	atomic_set(&folio->_nr_pages_mapped, 0);
+	atomic_set(&folio->_pincount, 0);
+
+	if (nr_pages > folio_nr_pages(folio)) {
+		dev_err(&priv->rproc->dev, "nr_pages > folio_nr_pages(folio)\n");
+	}
+
+	for (i = 1; i < nr_pages; i++) {
+		p = folio_page(folio, i);
+		p->flags &= ~PAGE_FLAGS_CHECK_AT_FREE;
+		p->mapping = NULL;
+		if (!demote)
+			set_page_refcounted(p);
+		p->pgmap = &priv->pgmap;
+		set_page_count(p, 0);
+	}
+	__folio_clear_head(folio);
+	set_page_count(folio_page(folio, 0), 0);
+}
+
+static bool __prep_compound_gigantic_folio(struct folio *folio,
+					unsigned int order, bool demote)
+{
+	int i, j;
+	int nr_pages = 1 << order;
+	struct page *p;
+
+	__folio_clear_reserved(folio);
+	for (i = 0; i < nr_pages; i++) {
+		p = folio_page(folio, i);
+		if (i != 0)
+			set_page_count(p, 0);
+		else
+			set_page_count(p, 1);
+		/*
+		 * For gigantic hugepages allocated through bootmem at
+		 * boot, it's safer to be consistent with the not-gigantic
+		 * hugepages and clear the PG_reserved bit from all tail pages
+		 * too.  Otherwise drivers using get_user_pages() to access tail
+		 * pages may get the reference counting wrong if they see
+		 * PG_reserved set on a tail page (despite the head page not
+		 * having PG_reserved set).  Enforcing this consistency between
+		 * head and tail pages allows drivers to optimize away a check
+		 * on the head page when they need know if put_page() is needed
+		 * after get_user_pages().
+		 */
+		if (i != 0)	/* head page cleared above */
+			__ClearPageReserved(p);
+		/*
+		 * Subtle and very unlikely
+		 *
+		 * Gigantic 'page allocators' such as memblock or cma will
+		 * return a set of pages with each page ref counted.  We need
+		 * to turn this set of pages into a compound page with tail
+		 * page ref counts set to zero.  Code such as speculative page
+		 * cache adding could take a ref on a 'to be' tail page.
+		 * We need to respect any increased ref count, and only set
+		 * the ref count to zero if count is currently 1.  If count
+		 * is not 1, we return an error.  An error return indicates
+		 * the set of pages can not be converted to a gigantic page.
+		 * The caller who allocated the pages should then discard the
+		 * pages using the appropriate free interface.
+		 *
+		 * In the case of demote, the ref count will be zero.
+		 */
+		if (!demote) {
+			if (!page_ref_freeze(p, 1)) {
+				pr_warn("HugeTLB page can not be used due to unexpected inflated ref count\n");
+				goto out_error;
+			}
+		} else {
+			VM_BUG_ON_PAGE(page_count(p), p);
+		}
+		if (i != 0)
+			set_compound_head(p, &folio->page);
+	}
+	__folio_set_head(folio);
+	/* we rely on prep_new_hugetlb_folio to set the destructor */
+	folio_set_order(folio, order);
+	atomic_set(&folio->_entire_mapcount, -1);
+	atomic_set(&folio->_nr_pages_mapped, 0);
+	atomic_set(&folio->_pincount, 0);
+	return true;
+
+out_error:
+	/* undo page modifications made above */
+	for (j = 0; j < i; j++) {
+		p = folio_page(folio, j);
+		if (j != 0)
+			clear_compound_head(p);
+		set_page_refcounted(p);
+	}
+	/* need to clear PG_reserved on remaining tail pages  */
+	for (; j < nr_pages; j++) {
+		p = folio_page(folio, j);
+		__ClearPageReserved(p);
+	}
+	return false;
+}
+#endif
 #endif
 
 static void *rproc_alloc_coherent(struct device *dev, size_t size,
@@ -319,10 +589,19 @@ static void *rproc_alloc_coherent(struct device *dev, size_t size,
 		return ptr;
 	}
 
+#if defined(CONFIG_DEBUG_KMEMLEAK)
+	kmemleak_alloc(ptr, size, 1, flag);
+#endif
+
 #if defined(CONFIG_ZONE_DEVICE)
+#if (KERNEL_VERSION(6, 6, 0) > LINUX_VERSION_CODE)
 	if (order)
 		prep_compound_page(virt_to_page(ptr), order);
 	set_page_count(virt_to_page(ptr), 1);
+#else
+	if (order)
+		__prep_compound_gigantic_folio(virt_to_folio(ptr), order, true);
+#endif
 #endif
 	return ptr;
 }
@@ -336,11 +615,21 @@ static void rproc_free_coherent(struct device *dev, size_t size, void *vaddr,
 	int order = get_order(size);
 
 	size = 1 << (PAGE_SHIFT + order);
+	if (order)
+#if (KERNEL_VERSION(6, 6, 0) > LINUX_VERSION_CODE)
+		destroy_compound_page(priv, virt_to_page(vaddr), order);
+#else
+		__destroy_compound_gigantic_folio(priv, page_folio(virt_to_page(vaddr)), order, true);
+#endif
 #endif
 
 	dev_dbg(dev, "rproc_free_coherent: addr=%llx size=%lx, attrs=%lx\n",
 		dma_addr, size, attrs);
 	gen_pool_free(priv->dma_buf_pool, (unsigned long)vaddr, size);
+
+#if defined(CONFIG_DEBUG_KMEMLEAK)
+	kmemleak_free(vaddr);
+#endif
 }
 
 static const struct dma_map_ops rproc_dma_ops = {
@@ -401,10 +690,79 @@ static ssize_t peer_ready_show(struct device *dev, struct device_attribute *attr
 }
 static DEVICE_ATTR_RO(peer_ready);
 
+static int stress_thread_fn(void *data)
+{
+	struct rproc_host_priv *priv = data;
+
+	while (!kthread_should_stop()) {
+		void *buf;
+		dma_addr_t dma_addr;
+		u32 num_pages = get_random_u32() % 16;
+
+		buf = dma_alloc_coherent(priv->dev, PAGE_SIZE * num_pages,
+					 &dma_addr, GFP_KERNEL);
+		msleep(100);
+
+		if (buf)
+			put_page(virt_to_page(buf));
+	}
+
+	return 0;
+}
+
+static void start_stress(struct rproc_host_priv *priv)
+{
+	int i;
+
+	for (i = 0; i < NUM_STRESS_THREADS; i++) {
+		priv->stress_threads[i] =
+			kthread_create(stress_thread_fn, priv, "stress_%d", i);
+		if (IS_ERR(priv->stress_threads[i])) {
+			pr_err("Failed to create stress thread %d\n", i);
+			priv->stress_threads[i] = NULL;
+			continue;
+		}
+		wake_up_process(priv->stress_threads[i]);
+	}
+}
+
+static void stop_stress(struct rproc_host_priv *priv)
+{
+	int i;
+
+	for (i = 0; i < NUM_STRESS_THREADS; i++) {
+		if (priv->stress_threads[i]) {
+			kthread_stop(priv->stress_threads[i]);
+			priv->stress_threads[i] = NULL;
+		}
+	}
+}
+
+static ssize_t stress_store(struct device *dev, struct device_attribute *attr,
+			    const char *buf, size_t size)
+{
+	struct rproc_host_priv *priv = dev_get_drvdata(dev);
+	int ret = 0;
+	bool start;
+
+	ret = strtobool(buf, &start);
+	if (ret < 0)
+		return ret;
+
+	if (start) {
+		start_stress(priv);
+	} else {
+		stop_stress(priv);
+	}
+	return ret == 0 ? size : ret;
+}
+static DEVICE_ATTR_WO(stress);
+
 static struct attribute *rproc_dev_attrs[] = {
 	&dev_attr_peer_vmid.attr,
 	&dev_attr_peer_online.attr,
 	&dev_attr_peer_ready.attr,
+	&dev_attr_stress.attr,
 	NULL,
 };
 
@@ -553,6 +911,11 @@ static int rproc_host_probe(struct platform_device *pdev)
 	if (!priv->irq_info)
 		goto err_remove_rproc;
 
+	priv->tasks = kzalloc(priv->num_queues * sizeof(struct task_struct*),
+			GFP_KERNEL);
+	if (!priv->tasks)
+		goto err_remove_irq_info;
+
 	platform_set_drvdata(pdev, priv);
 
 	ret = sysfs_create_group(&dev->kobj, &rproc_dev_group);
@@ -565,6 +928,8 @@ static int rproc_host_probe(struct platform_device *pdev)
 	queue_work(priv->workq, &priv->attach_work);
 	return 0;
 
+err_remove_irq_info:
+	kfree(priv->irq_info);
 err_remove_rproc:
 	rproc_del(rproc);
 err_release_gen_pool:

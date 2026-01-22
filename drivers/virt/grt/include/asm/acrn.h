@@ -61,4 +61,32 @@ static inline long acrn_hypercall4(unsigned long hcall_id, unsigned long param1,
 	return acrn_hypercall5(hcall_id, param1, param2, param3, param4, 0);
 }
 
+static inline long acrn_fastcall5(unsigned long fc_id, unsigned long param1,
+				   unsigned long param2, unsigned long param3,
+				   unsigned long param4, unsigned long param5)
+{
+	struct arm_smccc_res res;
+	unsigned long r7 = SMC_HYP_SECURE_ID << 16;
+
+	arm_smccc_smc(SMC_FC_NBL_VHM_REQ, fc_id, param1, param2, param3,
+		      param4, param5, r7, &res);
+	return res.a0;
+}
+
+static inline long acrn_fastcall0(unsigned long fc_id)
+{
+	return acrn_fastcall5(fc_id, 0, 0, 0, 0, 0);
+}
+
+static inline long acrn_fastcall1(unsigned long fc_id, unsigned long param1)
+{
+	return acrn_fastcall5(fc_id, param1, 0, 0, 0, 0);
+}
+
+static inline long acrn_fastcall2(unsigned long fc_id, unsigned long param1,
+				   unsigned long param2)
+{
+	return acrn_fastcall5(fc_id, param1, param2, 0, 0, 0);
+}
+
 #endif /* _ASM_ARM64_ACRN_H */

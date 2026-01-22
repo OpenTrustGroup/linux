@@ -19,6 +19,7 @@ obj-y += power_service/
 obj-y += samples/
 obj-y += nebula_rtc/
 obj-y += nebula_debug_tool/
+obj-y += vmlog/
 
 ## normal Makefile
 #SUBDIRS := $(wildcard */.)

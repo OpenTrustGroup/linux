@@ -50,7 +50,7 @@ static void acrn_irqfd_inject(struct hsm_irqfd *irqfd)
 	struct acrn_vm *vm = irqfd->vm;
 
 	if (irqfd->hwirq > 0) {
-		hcall_trigger_interrupt(irqfd->hwirq);
+		hcall_inject_hw_irq(irqfd->hwirq);
 		return;
 	}
 	acrn_msi_inject(vm, irqfd->msi.msi_addr, irqfd->msi.msi_data);

@@ -5,7 +5,12 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#if IS_REACHABLE(CONFIG_ARM_FFA_TRANSPORT_1_1)
+#include <linux/arm_ffa_1_1.h>
+#endif
+#if IS_REACHABLE(CONFIG_ARM_FFA_TRANSPORT)
 #include <linux/arm_ffa.h>
+#endif
 #include <linux/errno.h>
 #include <linux/scatterlist.h>
 #include <linux/sched.h>
@@ -909,7 +914,7 @@ static struct ffa_driver optee_ffa_driver = {
 
 int optee_ffa_abi_register(void)
 {
-	if (IS_REACHABLE(CONFIG_ARM_FFA_TRANSPORT))
+	if (IS_REACHABLE(CONFIG_ARM_FFA_TRANSPORT) || IS_REACHABLE(CONFIG_ARM_FFA_TRANSPORT_1_1))
 		return ffa_register(&optee_ffa_driver);
 	else
 		return -EOPNOTSUPP;
@@ -917,6 +922,6 @@ int optee_ffa_abi_register(void)
 
 void optee_ffa_abi_unregister(void)
 {
-	if (IS_REACHABLE(CONFIG_ARM_FFA_TRANSPORT))
+	if (IS_REACHABLE(CONFIG_ARM_FFA_TRANSPORT) || IS_REACHABLE(CONFIG_ARM_FFA_TRANSPORT_1_1))
 		ffa_unregister(&optee_ffa_driver);
 }

@@ -11,7 +11,12 @@
 #ifndef __OPTEE_FFA_H
 #define __OPTEE_FFA_H
 
+#if IS_REACHABLE(CONFIG_ARM_FFA_TRANSPORT_1_1)
+#include <linux/arm_ffa_1_1.h>
+#endif
+#if IS_REACHABLE(CONFIG_ARM_FFA_TRANSPORT)
 #include <linux/arm_ffa.h>
+#endif
 
 /*
  * Normal world sends requests with FFA_MSG_SEND_DIRECT_REQ and

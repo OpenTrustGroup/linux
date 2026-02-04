@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Support GKI mixed build
+
+ifeq ($(DEVICE_MODULES_PATH),)
+DEVICE_MODULES_PATH = $(srctree)
+else
+LINUXINCLUDE := $(DEVCIE_MODULES_INCLUDE) $(LINUXINCLUDE)
+endif
+
+# nebula core driver module (ko order: 1)
+obj-$(CONFIG_NEBULA_CORE)		+= nebula-core-driver.o
+nebula-core-driver-objs		+= trusty.o nebula-shm.o trusty-mem.o
+nebula-core-driver-objs		+= nebula-map.o nebula-queue.o
+nebula-core-driver-objs		+= trusty-pm.o trusty-irq.o
+nebula-core-driver-$(CONFIG_ARM)	+= trusty-smc-arm.o
+nebula-core-driver-$(CONFIG_ARM64)	+= trusty-smc-arm64.o
+nebula-core-driver-$(CONFIG_NEBULA_UNITTEST)	+= nebula-map-unittest.o
+nebula-core-driver-$(CONFIG_NEBULA_UNITTEST)	+= nebula-queue-unittest.o
+
+# nebula log driver module (ko order: 2)
+obj-$(CONFIG_NEBULA_LOG)	+= nebula-log-driver.o
+nebula-log-driver-objs		+= trusty-log.o nebula-log.o
+
+# nebula ipc driver module (ko order: 3)
+obj-$(CONFIG_NEBULA_VIRTIO_IPC)	+= nebula-ipc-driver.o
+nebula-ipc-driver-objs		+= trusty-ipc.o
+nebula-ipc-driver-$(CONFIG_NEBULA_IPC)		+= nebula-ipc.o
+
+# nebula rpc driver module (ko order: 4)
+# should be loaded before virtio device go online
+obj-$(CONFIG_NEBULA_RPC)		+= nebula-rpc-driver.o
+nebula-rpc-driver-objs		+= nebula-rpc.o nebula-rpcmgr.o
+nebula-rpc-driver-$(CONFIG_NEBULA_RPC_UNITTEST)		+= nebula-rpc-unittest.o nebula-rpcmgr-unittest.o
+
+# nebula virtio driver module (ko order: 5)
+obj-$(CONFIG_NEBULA_VIRTIO)	+= nebula-virtio-driver.o
+nebula-virtio-driver-objs		+= trusty-virtio.o
+
+# vtee core driver module (ko order: 6)
+obj-$(CONFIG_NEBULA_VTEE)		+= vtee-core-driver.o
+vtee-core-driver-objs		+= vtee.o vtee-irq.o
+
+# vtee log driver module (ko order: 7)
+obj-$(CONFIG_NEBULA_VTEE_LOG)		+= vtee-log-driver.o
+vtee-log-driver-objs		+= vtee-log.o vtee-nebula-log.o
+
+# vtee virtio driver module (ko order: 8)
+obj-$(CONFIG_NEBULA_VTEE)		+= vtee-virtio-driver.o
+vtee-virtio-driver-objs		+= vtee-virtio.o
+
+# vtee ipc forwarding driver module (ko order: 1)
+obj-$(CONFIG_NEBULA_VTEE_VIRTIO_IPC)		+= vtee-ipc-driver.o
+vtee-ipc-driver-objs		+= vtee-ipc.o
+vtee-ipc-driver-objs		+= nebula-shm.o trusty-mem.o
+vtee-ipc-driver-objs		+= nebula-queue.o nebula-map.o
+vtee-ipc-driver-$(CONFIG_NEBULA_IPC)		+= nebula-ipc.o
+
+# the following unittest drivers only available in QEMU platform for now
+# due to this feature should change the kernel common code.
+# TODO: re-write unittest with official kernel unittest API or framework
+obj-$(CONFIG_NEBULA_UNITTEST) += nebula-unittest.o
+
+
+# nebula trace driver
+obj-y += nebula_trace/
+ifeq ($(CONFIG_FTRACE),y)
+	obj-y += boot_ticks.o
+endif

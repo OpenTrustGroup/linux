@@ -1,0 +1,83 @@
+#
+# Makefile for nebula components
+#
+
+CURDIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+
+subdir-ccflags-y += -Werror -Wunused-label
+
+obj-$(CONFIG_NEBULA_CORE)		+= trusty.o
+obj-$(CONFIG_ARM)			+= trusty-smc-arm.o
+obj-$(CONFIG_ARM64)			+= trusty-smc-arm64.o
+obj-$(CONFIG_NEBULA_CORE)		+= nebula-shm.o
+obj-$(CONFIG_NEBULA_CORE)		+= trusty-pm.o
+obj-$(CONFIG_NEBULA_CORE)		+= nebula-map.o
+obj-$(CONFIG_NEBULA_CORE)		+= nebula-queue.o
+obj-$(CONFIG_NEBULA_CORE)		+= trusty-mem.o
+obj-$(CONFIG_NEBULA_CORE)		+= trusty-irq.o
+obj-$(CONFIG_NEBULA_FIQ)	+= trusty-fiq.o
+obj-$(CONFIG_NEBULA_FIQ_ARM)	+= trusty-fiq-arm.o
+obj-$(CONFIG_NEBULA_FIQ_ARM64)	+= trusty-fiq-arm64.o trusty-fiq-arm64-glue.o
+obj-$(CONFIG_NEBULA_LOG)	+= trusty-log.o nebula-log.o
+obj-$(CONFIG_NEBULA_VIRTIO)	+= trusty-virtio.o
+obj-$(CONFIG_NEBULA_VIRTIO_IPC)	+= trusty-kern-ipc.o
+obj-$(CONFIG_NEBULA_VIRTIO_IPC)	+= trusty-kern-ipc-sample.o
+obj-$(CONFIG_NEBULA_VIRTIO_IPC)	+= trusty-ipc.o
+
+obj-$(CONFIG_NEBULA_IPC)	+= nebula-ipc.o
+obj-$(CONFIG_NEBULA_IPC_UNITTEST)	+= nebula-ipc-unittest.o
+
+obj-$(CONFIG_NEBULA_UNITTEST) += nebula-unittest.o
+
+ifeq ($(CONFIG_NEBULA_UNITTEST),y)
+obj-$(CONFIG_NEBULA_CORE) += nebula-map-unittest.o
+obj-$(CONFIG_NEBULA_CORE) += nebula-queue-unittest.o
+endif
+
+obj-$(CONFIG_NEBULA_VTEE)	+= vtee.o
+obj-$(CONFIG_NEBULA_VTEE)	+= vtee-virtio.o
+obj-$(CONFIG_NEBULA_VTEE)	+= vtee-irq.o
+obj-$(CONFIG_NEBULA_VTEE_LOG)	+= vtee-log.o vtee-nebula-log.o
+
+obj-$(CONFIG_NEBULA_RPC)		+= nebula-rpcmgr.o
+obj-$(CONFIG_NEBULA_RPC)		+= nebula-rpc.o
+obj-$(CONFIG_NEBULA_RPC)		+= nebula-rpc-callbacks.o
+
+obj-$(CONFIG_NEBULA_VTEE_VIRTIO_IPC)	+= vtee-ipc.o
+obj-$(CONFIG_NEBULA_VTEE_VIRTIO_IPC)	+= nebula-shm.o trusty-mem.o
+obj-$(CONFIG_NEBULA_VTEE_VIRTIO_IPC)	+= trusty-kern-ipc.o trusty-kern-ipc-sample.o
+obj-$(CONFIG_NEBULA_VTEE_VIRTIO_IPC)	+= nebula-queue.o nebula-map.o
+
+# mtk/ion_drv.h
+ccflags-y += -I$(srctree)/drivers/staging/android/ion
+ccflags-y += -I$(srctree)/drivers/staging/android/mtk_ion  # For kernel version >= 4.19
+
+ccflags-y += -I$(srctree)/drivers/staging/android/
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/
+ccflags-y += -I$(CURDIR)
+
+ccflags-$(CONFIG_MTK_M4U) += -I$(srctree)/drivers/misc/mediatek/m4u/$(MTK_PLATFORM)/
+ccflags-$(CONFIG_MTK_M4U) += -I$(srctree)/drivers/misc/mediatek/m4u/2.0/
+
+ifdef CONFIG_NEBULA_SECCAM_ION
+obj-$(CONFIG_NEBULA_SECCAM_ION) += trusty-ion.o
+obj-$(CONFIG_NEBULA_HAL_GENERIC) += hal/generic/ion.o
+obj-$(CONFIG_NEBULA_HAL_MEDIATEK) += hal/mediatek/ion.o
+endif
+
+ifdef CONFIG_NEBULA_TUI
+obj-$(CONFIG_NEBULA_HAL_GENERIC) += hal/generic/tui.o
+obj-$(CONFIG_NEBULA_TUI) += nbl-tui.o
+obj-$(CONFIG_NEBULA_TUI) += nbl-tui-input.o
+obj-$(CONFIG_NEBULA_TUI) += hal/weak_impl.o
+obj-$(CONFIG_NEBULA_TUI_UNITTEST) += nebula-tui-unittest.o
+endif
+
+obj-$(CONFIG_NEBULA_RPC_UNITTEST) += nebula-rpcmgr-unittest.o
+obj-$(CONFIG_NEBULA_RPC_UNITTEST) += nebula-rpc-unittest.o
+
+obj-y += nebula_trace/
+
+ifeq ($(CONFIG_FTRACE),y)
+	obj-y += boot_ticks.o
+endif

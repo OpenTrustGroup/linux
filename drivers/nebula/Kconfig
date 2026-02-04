@@ -1,0 +1,259 @@
+#
+# Nebula
+#
+
+menu "Nebula"
+
+config NEBULA
+	tristate "Nebula"
+	default n
+	help
+	  Nebula is a secure Operating System (OS) that provides a
+	  Trusted Execution Environment (TEE) for Android.
+	  Nebula is compatible with ARM and Intel processors.
+	  Say N if unsure.
+
+config NEBULA_CORE
+	tristate "Nebula core driver"
+	depends on NEBULA
+	default n
+	help
+	  Nebula core driver provides the basic function for other
+	  Nebula drivers.
+	  Say N if unsure.
+
+config NEBULA_VIRQ_SIMULATION
+	tristate "Nebula Virq Simulation"
+	default n
+	help
+	  This module adds support for simulations of communications based
+	  on virq with Nebula Services.
+
+	  It'll be called trusty-ipc, trusty-virtio.
+	  Say N if unsure.
+
+config NEBULA_FIQ
+	tristate
+	depends on NEBULA_CORE
+	default n
+
+config NEBULA_FIQ_ARM
+	tristate
+	depends on NEBULA_CORE
+	depends on ARM
+	select FIQ_GLUE
+	select NEBULA_FIQ
+	default n
+
+config NEBULA_FIQ_ARM64
+	tristate
+	depends on NEBULA_CORE
+	depends on ARM64
+	select FIQ_GLUE
+	select NEBULA_FIQ
+	default n
+
+config NEBULA_LOG
+	tristate
+	depends on NEBULA_CORE
+	default y
+
+config NEBULA_VIRTIO
+	tristate "Nebula virtio support"
+	depends on NEBULA_CORE
+	select VIRTIO
+	default y
+
+config NEBULA_VIRTIO_IPC
+	tristate "Nebula Virtio IPC driver"
+	depends on NEBULA_VIRTIO
+	default y
+	help
+	  This module adds support for communications with Nebula Services
+
+	  If you choose to build a module, it'll be called trusty-ipc.
+	  Say N if unsure.
+
+config NEBULA_IPC
+	tristate "Nebula IPC Kernel API"
+	depends on NEBULA_VIRTIO_IPC || NEBULA_VTEE_VIRTIO_IPC
+	default n
+	help
+	  This module adds APIs for drivers to communicate with Nebula services
+
+config NEBULA_IPC_UNITTEST
+	tristate "Nebula IPC Kernel API Unittest"
+	depends on NEBULA_IPC && NEBULA_UNITTEST
+	default n
+	help
+	  Enable debugging features such as debugfs for ipc kernel apis.
+
+	  Say N if unsure.
+
+config NEBULA_TUI
+	tristate "Nebula TUI"
+	depends on NEBULA_RPC
+	default n
+	help
+	  This module adds support for Trusted UI based on
+	  Trusted Execution Environment (TEE) for Android.
+
+	  Say N if unsure.
+
+config NEBULA_TUI_UNITTEST
+	tristate "Nebula TUI Unittest"
+	depends on NEBULA_TUI && NEBULA_UNITTEST
+	default n
+	help
+	  This module adds testcases for Trusted UI.
+
+	  Say N if unsure.
+
+config NEBULA_SECCAM_ION
+	tristate "Nebula secure camera buffer ION heap"
+	depends on NEBULA_CORE
+	default n
+	help
+	  This module adds support for secure camera buffer ION heap
+
+	  Say N if unsure.
+
+config NEBULA_SECCAM_ION_WRITEABLE
+	bool "Enable writeable secure camera buffer"
+	depends on NEBULA_SECCAM_ION
+	default n
+	help
+	  Enable write access to secure camera buffer for integration test
+
+	  Say N if unsure.
+
+config NEBULA_IPC_DEV_MAJOR
+	int "Nebula IPC character device major number"
+	depends on NEBULA_VIRTIO_IPC
+	default 0
+	help
+	  This number will be use as the major number in registering
+	  chrdev if it's NOT 0. If it's 0, the major number would be
+	  choosen dynamically. Pick an valid number if it conflicts
+	  with other legacy drivers.
+
+config NEBULA_TUI_DEV_MAJOR
+	int "Nebula TUI character device major number"
+	depends on NEBULA_TUI
+	default 0
+	help
+	  This number will be use as the major number in registering
+	  chrdev if it's NOT 0. If it's 0, the major number would be
+	  choosen dynamically. Pick an valid number if it conflicts
+	  with other legacy drivers.
+
+config NEBULA_TUI_PWRKEY_EVENT_DEV_MAJOR
+	int "Nebula TUI PowerKeyEvent character device major number"
+	depends on NEBULA_TUI
+	default 0
+	help
+	  This number will be use as the major number in registering
+	  chrdev if it's NOT 0. If it's 0, the major number would be
+	  choosen dynamically. Pick an valid number if it conflicts
+	  with other legacy drivers.
+
+config NEBULA_LOG_DEV_MAJOR
+	int "Nebula log character device major number"
+	depends on NEBULA_LOG
+	default 0
+	help
+	  This number will be use as the major number in registering
+	  chrdev if it's NOT 0. If it's 0, the major number would be
+	  choosen dynamically. Pick an valid number if it conflicts
+	  with other legacy drivers.
+
+config NEBULA_RPC_DEV_MAJOR
+	int "Nebula rpc character device major number"
+	depends on NEBULA_RPC
+	default 0
+	help
+	  This number will be use as the major number in registering
+	  chrdev if it's NOT 0. If it's 0, the major number would be
+	  choosen dynamically. Pick an valid number if it conflicts
+	  with other legacy drivers.
+
+config NEBULA_UNITTEST
+	tristate "Nebula unittests"
+	default n
+
+config NEBULA_RPC
+	tristate "Nebula RPC"
+	depends on NEBULA_IPC
+	default n
+
+config NEBULA_RPC_UNITTEST
+	tristate "Nebula RPC Unittest"
+	depends on NEBULA_RPC && NEBULA_UNITTEST
+	default n
+
+config NEBULA_VTEE
+	tristate "Nebula Virtual TEE support (SMC forwarding mode)"
+	depends on NEBULA_CORE
+	default n
+	help
+	  Nebula virtual TEE driver is used for communicating with the Nebula TEE
+	  OS if the Nebula Hypervisor is enabled.
+	  Say N if unsure.
+
+config NEBULA_VTEE_LOG
+	tristate "Nebula Virtual TEE log driver"
+	depends on NEBULA_VTEE
+	default n
+	help
+	  Nebula virtual TEE log driver is used for collecting Nebula vTEE OS
+	  logs and print to kernel dmesg buffer.
+	  Say N if unsure.
+
+config NEBULA_VTEE_LOG_DEV_MAJOR
+	int "Nebula log character device major number"
+	depends on NEBULA_VTEE_LOG
+	default 0
+	help
+	  This number will be use as the major number in registering
+	  chrdev if it's NOT 0. If it's 0, the major number would be
+	  choosen dynamically. Pick an valid number if it conflicts
+	  with other legacy drivers.
+
+config NEBULA_VTEE_VIRTIO_IPC
+	tristate "Nebula Virtual TEE IPC forwarding driver"
+	depends on !NEBULA_CORE
+	default n
+	help
+	  This driver helps to submit vTEE IPC messages to the TIPC agent
+	  in the guest Service OS and then forward it to the vTEE if the
+	  Nebula Hypervisor is enabled.
+	  Note that this driver cannot be used if CONFIG_NEBULA_CORE is
+	  enabled.
+
+config NEBULA_VTEE_IPC_DEV_MAJOR
+	int "Nebula vTEE IPC character device major number"
+	depends on NEBULA_VTEE_VIRTIO_IPC
+	default 0
+	help
+	  This number will be use as the major number in registering
+	  chrdev if it's NOT 0. If it's 0, the major number would be
+	  choosen dynamically. Pick an valid number if it conflicts
+	  with other legacy drivers.
+
+choice
+	prompt "Platform flavor"
+	default NEBULA_HAL_GENERIC
+
+config NEBULA_HAL_GENERIC
+	bool "GENERIC"
+	help
+	  Generic HAL implementation
+
+config NEBULA_HAL_MEDIATEK
+	bool "Mediatek"
+	help
+	  Supporting for Mediatek platform
+
+endchoice
+
+endmenu

@@ -56,7 +56,7 @@ config NEBULA_FIQ_ARM64
 config NEBULA_LOG
 	tristate
 	depends on NEBULA_CORE
-	default y
+	default n
 
 config NEBULA_VIRTIO
 	tristate "Nebula virtio support"

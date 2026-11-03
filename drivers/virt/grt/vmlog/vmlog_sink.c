@@ -45,6 +45,14 @@ struct memlog {
 
 static struct memlog vmlog_sink_client;
 
+/*
+ * The VM whose vmlog back end the notification wakes. The hypervisor passes
+ * the hypercall's first parameter to vq_wakeup(), which looks the back end up
+ * by the VMM's vmid, and the VMM writes that vmid into this node as
+ * "notify-vmid". Without the property: the SOS (-1).
+ */
+static s32 notify_vmid = -1;
+
 #if USE_POLLING_MODE
 static struct timer_list disable_polling_timer;
 static bool polling_disabled = false;
@@ -56,7 +64,7 @@ static inline long hcall_notify_vmlog_sinking(void) {
 		return 0;
 	}
 #endif
-	return acrn_fastcall0(FC_ID_NOTIFY_VMLOG_SINK);
+	return acrn_fastcall1(FC_ID_NOTIFY_VMLOG_SINK, notify_vmid);
 }
 
 #if USE_POLLING_MODE
@@ -228,6 +236,8 @@ static int vmlog_sinking_probe(struct platform_device *pdev) {
 	rb->put = 0;
 	pr_info("vmlog sinking client ring buffer size=0x%x, reserved_mem buf_pa=0x%llx,size=0x%zx offsetof=0x%lx\n",
 					rb->sz, log->buf_pa, log->buf_sz, offsetof(struct log_rb, data));
+	if (of_property_read_s32(pdev->dev.of_node, "notify-vmid", &notify_vmid) == 0)
+		pr_info("vmlog sinking notify vmid=%d\n", notify_vmid);
 	spin_lock_init(&log->log_rb_lock);
 
 	vmlog_console_init();

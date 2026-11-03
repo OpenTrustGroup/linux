@@ -138,7 +138,8 @@
 #define FC_ID_INJECT_HW_IRQ                 0x0UL
 #define FC_ID_INJECT_VIRT_IRQ               0x1UL
 #define FC_ID_NOTIFY_VMLOG                  0x2UL
-#define FC_ID_NOTIFY_VMLOG_SINK             0x3UL
+#define FC_ID_GPU_ARBITER                   0x3UL
+#define FC_ID_NOTIFY_VMLOG_SINK             0x4UL
 
 #define SMC_SC_PLAT_TEST_MULTIPLY           SMC_STDCALL_NR(SMC_ENTITY_PLAT, 115)
 #define SMC_SC_PLAT_MTEE_SERVICE_CMD        SMC_STDCALL_NR(SMC_ENTITY_PLAT, 121)
